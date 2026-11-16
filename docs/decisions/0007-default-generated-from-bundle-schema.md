@@ -1,6 +1,6 @@
 # 0007 — The default set is generated from the bundle schema
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-16)
 - **Date:** 2026-11-16
 - **Plan (if any):** [`docs/plans/2026-11-16-stabilize-and-2.0.md`](../plans/2026-11-16-stabilize-and-2.0.md) §4 (this
   ADR) and §6 step 2 (the work that implements it). Builds on [ADR 0008](0008-end-state-reversible-default-custom-projections-filters.md)
@@ -44,7 +44,8 @@ ADR keeps its generation policy and its pointer rule, and takes the rest from AD
 - **Narrowed ClinVar-GKM.** Its 67 string-or-object positions become 27 pointers, 21 inline objects and 19 `false`, so
   its default has no `<prop>_json` column. It closes extension values as standalone closed extension classes (each
   fixing `name` by `const`) in the `extensions` items' `oneOf`. The pilot's patched compiler needed four rules (N1–N4)
-  to read them.
+  to read them. The pilot is on ClinVar-GKM's local branch `feat/narrow-profiles-pilot` @ `e487baa` (not pushed), so
+  this ADR describes those rules by their effect (rule 1.11).
 - **Neither published schema declares a pointer pattern.** No `^#/` pattern appears in `schemas/1.1.0/` or
   `tests/fixtures/civic/schema-set/`. Both reach gkm-core's `iriReference` (`type: string`, `format: iri-reference`;
   `schemas/1.1.0/ga4gh/schema/gkm-core/1.3.0/json/iriReference`).
@@ -56,7 +57,8 @@ ADR keeps its generation policy and its pointer rule, and takes the rest from AD
 1. **The default is a versioned policy, and this is version 2.0.** One number names the policy, the compiler's rules
    version (`RULES_VERSION`) and the table spec `sections`; it moves from `1.0` to `2.0` with this ADR. A change to the
    policy bumps it by the table in `.claude/rules/table-spec.md`. The default of a bundle schema depends only on the
-   schema set and the policy version: the same two always give the same bytes.
+   schema set, the policy version and the version property, if one is given (2.4): the same inputs always give the
+   same bytes.
 2. **One table per collection**, found by ADR 0006's root rule; root values stay in `root_values`. The key column `id`
    comes first. Then every property the record schema allows, through its whole `$ref`, `allOf`, `oneOf` and `anyOf`
    closure, one column per name (ADR 0008 1.1), in schema order: a union contributes its first branch's properties,
@@ -71,31 +73,40 @@ ADR keeps its generation policy and its pointer rule, and takes the rest from AD
    the build.
 6. **A pointer is declared by its `pattern`** (ADR 0008 1.5). A string position whose schema has a `pattern` beginning
    `^#/<section>/` or `^#/(<section>|<section>…)/`, each name a collection of the bundle, holds the bare id. A
-   `<prop>_section` beside it holds the section when there are several targets. This applies at any depth and in
-   lists. These positions are the table's foreign keys. A pattern beginning `^#/` in any other form, or naming
-   something that isn't a collection, stops generation.
-7. **An undeclared IRI keeps the generic rule** (ADR 0008 1.4). A string position whose schema has
-   `format: iri-reference` and no pointer pattern gets `<prop>` and `<prop>_section`. A value of the form
-   `#/<section>/<rest>`, where `<section>` is a collection, is stored as `<rest>` with its section; any other string is
-   stored as written, with a NULL section. A non-NULL section rebuilds `#/<section>/<rest>`.
+   `<prop>_section` beside it holds the section when there are several targets. This applies at any depth; in a list,
+   rule 10 says how the parts are kept. These positions are the table's foreign keys. A pattern beginning `^#/` in any
+   other form, or naming something that isn't a collection, stops generation.
+7. **An undeclared IRI keeps the generic rule** (ADR 0008 1.4). Only a string position whose schema has
+   `format: iri-reference` and no pointer pattern gets it; other strings are stored as written, with no section. Such a
+   position is `<prop>` and `<prop>_section`. A value of the form `#/<section>/<rest>`, where `<section>` is a
+   collection, is stored as `<rest>` with its section; any other string is stored as written, with a NULL section. A
+   non-NULL section rebuilds `#/<section>/<rest>`.
 8. **String or object is split.** A position that may hold a string or an object is `<prop>`, VARCHAR, for the string
    (with rule 6 or 7 if it applies), and `<prop>_json`, the object as compact JSON text. A producer that always writes
    one form narrows the position, and then it is one typed column or STRUCT.
 9. **A Range is recognised by its shape, at any depth** (ADR 0009 §4): an array of exactly two integers or nulls, as
    the compiler reads it today (`compiler.py:292-302`). An integer-or-Range is `<prop>`, `<prop>_min` and `<prop>_max`:
    three columns at the top level, three fields inside a STRUCT.
-10. **In a list, derived parts are parallel lists.** `<prop>_section`, `<prop>_json`, `<prop>_min` and `<prop>_max` of
-    a list position are lists of the same length as `<prop>`, as `<prop>_section` is today (`compiler.py:642-656`).
+10. **In a list, each element with derived parts is one STRUCT.** A list whose elements have parts beside the value
+    (rules 6–9) is a list of STRUCTs, one per element, so the parts stay together under `UNNEST`. The fields are named
+    by part: `id` for a pointer or IRI (bare id, or the string as written), `string` for any other string, `json` for
+    an inline object, `section`, and for an integer-or-Range `integer`, `min` and `max`. A list of pointers with
+    several targets is `STRUCT(id, section)[]`; a list of pointers or inline objects is `STRUCT(id, section, json)[]`.
+    A list whose elements have no derived part (a pointer with one target, for example) stays a plain list. This
+    replaces today's parallel `<prop>` and `<prop>_section` lists (`compiler.py:642-656`).
 11. **Extensions are recognised by shape** (ADR 0009 §4): a property named `extensions` whose elements are objects
     with `name` and `value`. It is a list of STRUCTs: `name`, the element's other allowed fields (`id`, `description`
     for gkm-core's `Extension`), then one `value_<kind>` slot per JSON kind its value can take, in the order of
     `compiler.py:57-68`. Object values from several classes merge into one `value_object` STRUCT by the union rule. An
     open value is a `value_json` slot of JSON text. A `oneOf` of closed extension classes in `items` is read as one
     element type whose value is the union of the classes' values. An element's own `extensions` re-enters `Extension`,
-    so it is JSON text (rule 12).
+    so it is JSON text (rule 12). Typed slots per extension name, where every element class fixes `name` by `const`,
+    may come later as a refinement of the policy, under a new policy version.
 12. **Where the schema can't settle a position, it is JSON text.** A map whose keys are data, a keyword the rules
-    can't read, an open object, a position with no shape keyword, a union of scalar types, and a class that reaches itself (at the position where it re-enters) keep the property's name and hold
-    compact JSON text, as VARCHAR, at any depth. Generation never stops on a position.
+    can't read, an open object, a position with no shape keyword, any union of scalar types, and a class that reaches
+    itself (at the position where it re-enters) keep the property's name and hold compact JSON text at any depth. JSON
+    text is VARCHAR, not DuckDB's `JSON` type, so readers other than DuckDB read it as a string. Generation never stops
+    on a position.
 13. **Names are the schema's.** The tool quotes every name. A derived name (`<prop>_section`, `<prop>_json`,
     `<prop>_min`, `<prop>_max`, `id_present`, `value_<kind>`) that equals a property name at the same level stops
     generation, naming both.
@@ -111,7 +122,10 @@ the default can't reproduce still stops the build, through the canonical row che
    compiler stays the single path from a column set to a table spec (ADR 0006 decision 1).
 3. **Foreign keys are recorded.** Each table lists its rule-6 positions (the column, or nested field path, and the
    target sections) in `table-spec.json` and in every file's key-value metadata. Rule-7 positions aren't foreign keys.
-4. **Every set says what it is.** The manifest and every file's key-value metadata record the policy version and
+4. **The version property is given, never inferred.** `generate` and `build` take it with `--version-property`
+   (ADR 0009 §4: there is no default name), and the generated column set records it. Without it, the version is a
+   root value, kept in `root_values`, and still round-trips.
+5. **Every set says what it is.** The manifest and every file's key-value metadata record the policy version and
    whether the set is the default or a projection (with the projection's name).
 
 ### 3. Compliance
@@ -121,7 +135,8 @@ the default can't reproduce still stops the build, through the canonical row che
    such. `generate --check <column-set>` reports compliant, or lists each difference with its position and both sides.
 2. **Anything else is a named projection** (ADR 0008 §3). It declares itself a projection, with a name, in the column
    set, and is built, labelled and rebuilt as ADR 0008 §3 says. A column set that neither complies nor declares itself
-   a projection is refused, with the differences listed.
+   a projection is refused, with the differences listed. There is no third label: a column set that drops nothing
+   and only renames or retypes is still a named projection, labelled lossy.
 3. **Narrowing is the producer's way to change the default** (ADR 0008 1.4): `false`, an object-only restatement, a
    pointer pattern, a closed extension class. Each changes the schema, so it arrives as a new schema version with a new
    default. None is needed for the round trip.
@@ -146,10 +161,13 @@ the default can't reproduce still stops the build, through the canonical row che
   usable as a projection. The golden test (`tests/test_compiler.py` against `tests/fixtures/sections-golden/`) is
   re-based in the same work.
 - **Compiler work** (plan §6 step 2): read `false`, `pattern` and `format`; the string-or-object split; JSON text and
-  derived parts at any depth; extension elements with extra fields and `value_json`; `id_present`; foreign keys in
+  derived parts at any depth, with a STRUCT per list element; extension elements with extra fields and `value_json`; `id_present`; foreign keys in
   `table-spec.json` and key-value metadata; `generate` and `generate --check`; drop `ordinal` and `key_order`; set
   `RULES_VERSION` to `2.0`. The generic-core test (ADR 0006 decision 8) still applies: no producer is named.
-- **On acceptance,** ADR 0006 gets an "Amended by ADR 0007" note.
+- **Lists change shape.** A top-level list of pointers with several targets is today two parallel lists, `<prop>`
+  and `<prop>_section`; under 2.0 it is one list of `STRUCT(id, section)`. A query that zipped the two lists unnests
+  one.
+- ADR 0006 carries an "Amended by ADR 0007" note.
 
 ## Earlier ADRs touched
 
@@ -160,18 +178,18 @@ the default can't reproduce still stops the build, through the canonical row che
 | 0009 | The column set "generated from the schema once ADR 0007's generator lands" (decision 1) is this ADR's `generate`. |
 | 0002 | The default's table-spec version is the policy version; the compatibility matrix states it. |
 
-## Open questions for the maintainer
+## Resolved questions
 
-1. **Which strings get the generic IRI rule (1.7):** only `format: iri-reference` (proposed), or every string
-   position? Every string is safe for the round trip, but adds a `_section` column to every string.
-2. **Lists of split or derived positions (1.10):** parallel lists (proposed, as today's top-level pointers), or a list
-   of STRUCTs `{<prop>, <prop>_section, <prop>_json}` per element, which keeps the parts together for `UNNEST`.
-3. **`id` (1.5):** is `id_present` the right shape, and should a record whose `id` differs from its key stop the
-   build (proposed), or be stored?
-4. **Extension value slots (1.11):** one slot per JSON kind (proposed, as today), or, where every element class fixes
-   `name` by `const` (the narrowed ClinVar-GKM form), one typed slot per extension name?
-5. **The version property:** the default names none unless `--version-property` is given, so it is otherwise a root
-   value (which round-trips). Should `generate` infer it from the schema instead?
-6. **Projections that drop nothing:** a non-compliant column set that only renames or retypes (ClinVar-GKM's 1.1.0 set
-   is close to this) is labelled lossy under 3.2. Is that acceptable, or does it need a third label?
-7. **JSON text type:** VARCHAR (proposed, as today's `json` columns), or DuckDB's `JSON` logical type.
+The draft's open questions, answered by the maintainer on acceptance (2026-11-16) and written into the decision above:
+
+1. The generic IRI rule covers only strings with `format: iri-reference`, not every string (1.7).
+2. Pointer, IRI, string-or-object and Range parts inside a list are one STRUCT per element, not parallel lists (1.10).
+   2.0 breaks the layout anyway.
+3. A record whose `id` differs from its key stops the build; `id_present` stays (1.5).
+4. Extension values get one slot per JSON kind; typed slots per extension name may come later (1.11).
+5. `generate` doesn't infer the version property; it is given with `--version-property` (2.4).
+6. A column set that only renames or retypes is a lossy named projection; there is no third label (3.2).
+7. JSON text is VARCHAR, for readers other than DuckDB (1.12).
+
+Also confirmed: a column set that neither complies nor declares itself a projection is refused (3.2); any union of
+scalar types is JSON text (1.12); a derived-name clash stops generation (1.13).

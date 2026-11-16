@@ -23,6 +23,6 @@ cover the tool only, and link to those rather than restating them.
 - [0004 — Selective builds: a driver, a pointer walk and a verbatim mini-bundle](0004-driver-based-selection.md)
 - [0005 — A full sections build is a lossless encoding of the bundle text](0005-lossless-sections-build.md)
 - [0006 — Tables are compiled from a bundle schema and its column set](0006-sections-spec-compiled-from-schemas.md)
-- [0007 — The default set is generated from the bundle schema](0007-default-generated-from-bundle-schema.md) (proposed)
+- [0007 — The default set is generated from the bundle schema](0007-default-generated-from-bundle-schema.md)
 - [0008 — End state: one reversible default set, custom projections, and filters both ways](0008-end-state-reversible-default-custom-projections-filters.md)
 - [0009 — A generic GKM bundle tool, renamed gkm-bundle-parquet](0009-generic-gkm-bundle-tool-renamed.md)
