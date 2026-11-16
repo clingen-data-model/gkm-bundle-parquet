@@ -5,6 +5,10 @@ All notable changes to this tool. Each release states the table-spec versions it
 
 ## Unreleased
 
+- **Fixed:** closing an HTTP stream whose first request failed (an HTTP error, or giving up after the retries) no
+  longer raises `'_HttpStream' object has no attribute '_resp'`; it showed as an ignored exception when the stream was
+  garbage-collected (`transport.py`).
+
 ## 1.1.0 (2026-11-16)
 
 The last release under the name `clinvar-gkm-parquet` (ADR 0009 decision 3): it deprecates what 2.0.0 removes. Reads and
