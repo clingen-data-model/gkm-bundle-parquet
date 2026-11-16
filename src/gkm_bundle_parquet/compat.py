@@ -21,9 +21,11 @@ BUILTIN_SPECS: dict[str, str] = {
 }
 COMPILED_SPEC = SPEC_NAME  # compiled from a schema and its column set, not read from a tables.yaml (ADR 0006)
 DEFAULT_SPEC = "sections"  # what a build writes when no --spec is given (ADR 0003; baseline until 2026-10-29)
-KV_PREFIX = (
-    "clinvar_gkm_parquet."  # of every key-value entry a build writes; a rename here changes the files' bytes
-)
+# The prefix of every key-value entry a build writes; a change here changes the files' bytes.
+KV_PREFIX = "gkm_bundle_parquet."
+# The prefix of sets written by 1.x, under the tool's former name: `verify` and `rebuild` read it too (ADR 0009).
+LEGACY_KV_PREFIX = "clinvar_gkm_parquet."
+KV_PREFIXES = (KV_PREFIX, LEGACY_KV_PREFIX)
 PUBLISHED_SPEC = "clinvar-gkm"  # the spec of ClinVar-GKM's published set; its release and the oracle name it
 # Deprecated in 1.1.0 and removed in 2.0.0 (ADR 0008 decision 2), as is reading the default bundle (ADR 0009).
 DEPRECATED_SPECS = ("baseline", "clinvar-gkm")

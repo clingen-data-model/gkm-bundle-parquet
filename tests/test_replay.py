@@ -27,12 +27,12 @@ from _input_helpers import (
     write_gz,
 )
 
-from clinvar_gkm_parquet.build import load_inputs
-from clinvar_gkm_parquet.errors import BundleFormatError, ChainError, InputError
-from clinvar_gkm_parquet.model import BuildInputs, DeltaManifest, InputFile
-from clinvar_gkm_parquet.replay import check_chain, check_schema_versions, fold, read_delta
-from clinvar_gkm_parquet.sources import load_manifest, resolve_input
-from clinvar_gkm_parquet.spec import load_spec
+from gkm_bundle_parquet.build import load_inputs
+from gkm_bundle_parquet.errors import BundleFormatError, ChainError, InputError
+from gkm_bundle_parquet.model import BuildInputs, DeltaManifest, InputFile
+from gkm_bundle_parquet.replay import check_chain, check_schema_versions, fold, read_delta
+from gkm_bundle_parquet.sources import load_manifest, resolve_input
+from gkm_bundle_parquet.spec import load_spec
 
 FULL_SOURCE = SOURCE_RELEASE  # the release the fixture's records come from (tests/_fixture.py)
 # Two synthetic weekly deltas after it.
@@ -224,10 +224,10 @@ def test_delete_of_a_missing_key_warns(tmp_path, recs, caplog):
     (k0, _) = recs["submitter"][0]
     d1 = _delta(tmp_path, D1, FULL_SOURCE, {}, deleted={"submitter": [_key(k0), "synthetic:absent"]})
     d2 = _delta(tmp_path, D2, D1, {}, deleted={"submitter": [_key(k0)]})  # already gone
-    with caplog.at_level(logging.WARNING, logger="clinvar_gkm_parquet.replay"):
+    with caplog.at_level(logging.WARNING, logger="gkm_bundle_parquet.replay"):
         state = _load(tmp_path, [d1, d2])
     assert state.counts["submitter"] == len(recs["submitter"]) - 1
-    msgs = [r.getMessage() for r in caplog.records if r.name == "clinvar_gkm_parquet.replay"]
+    msgs = [r.getMessage() for r in caplog.records if r.name == "gkm_bundle_parquet.replay"]
     assert any(f"delta {D1}: 1 deleted submitter key(s)" in m and "synthetic:absent" in m for m in msgs)
     assert any(f"delta {D2}: 1 deleted submitter key(s)" in m and _key(k0) in m for m in msgs)
     assert len(msgs) == 2
@@ -237,7 +237,7 @@ def test_delete_after_an_upsert_of_an_absent_key_is_not_a_warning(tmp_path, recs
     (_, r0) = recs["gene"][0]
     d1 = _delta(tmp_path, D1, FULL_SOURCE, {"gene": [(b'"synthetic:gene-new"', r0)]})
     d2 = _delta(tmp_path, D2, D1, {}, deleted={"gene": ["synthetic:gene-new"]})
-    with caplog.at_level(logging.WARNING, logger="clinvar_gkm_parquet.replay"):
+    with caplog.at_level(logging.WARNING, logger="gkm_bundle_parquet.replay"):
         state = _load(tmp_path, [d1, d2])
     assert "synthetic:gene-new" not in _state(state.con, "gene")
     assert "not in the prior state" not in caplog.text

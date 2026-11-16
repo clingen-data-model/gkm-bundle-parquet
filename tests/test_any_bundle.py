@@ -21,10 +21,10 @@ import yaml
 from _fixture import FIXTURE, FIXTURES, SECTIONS
 from _input_helpers import bundle_bytes, fixture_sections, local_input, write_gz
 
-from clinvar_gkm_parquet import build as build_mod
-from clinvar_gkm_parquet import transport
-from clinvar_gkm_parquet.build import KV_PREFIX
-from clinvar_gkm_parquet.bundle import (
+from gkm_bundle_parquet import build as build_mod
+from gkm_bundle_parquet import transport
+from gkm_bundle_parquet.build import KV_PREFIX
+from gkm_bundle_parquet.bundle import (
     BundleShape,
     RootRules,
     layout_of,
@@ -32,14 +32,14 @@ from clinvar_gkm_parquet.bundle import (
     sniff_layout,
     stream_bundle,
 )
-from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.compiled import COMPILED_SPEC_FILE, compile_pairing, compiled_spec
-from clinvar_gkm_parquet.compiler import table_spec_sha256
-from clinvar_gkm_parquet.errors import BundleFormatError, InputError, SpecError, ToolError
-from clinvar_gkm_parquet.model import BuildInputs, InputFile
-from clinvar_gkm_parquet.spec import load_spec, resolve_spec
+from gkm_bundle_parquet.cli import main
+from gkm_bundle_parquet.compiled import COMPILED_SPEC_FILE, compile_pairing, compiled_spec
+from gkm_bundle_parquet.compiler import table_spec_sha256
+from gkm_bundle_parquet.errors import BundleFormatError, InputError, SpecError, ToolError
+from gkm_bundle_parquet.model import BuildInputs, InputFile
+from gkm_bundle_parquet.spec import load_spec, resolve_spec
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "clinvar_gkm_parquet"
+SRC = Path(__file__).resolve().parents[1] / "src" / "gkm_bundle_parquet"
 CIVIC = FIXTURES / "civic"
 CIVIC_SCHEMA = CIVIC / "schema-set"
 CIVIC_COLUMNS = CIVIC / "civic.columns.yaml"
@@ -183,8 +183,8 @@ def test_civic_set_is_checked_with_no_schema_on_hand(civic, tmp_path, capsys, mo
     def no_load(*a, **k):
         raise AssertionError("verify and rebuild need no schema or column set")
 
-    monkeypatch.setattr("clinvar_gkm_parquet.compiled.load_schema_set", no_load)
-    monkeypatch.setattr("clinvar_gkm_parquet.compiled.load_column_set", no_load)
+    monkeypatch.setattr("gkm_bundle_parquet.compiled.load_schema_set", no_load)
+    monkeypatch.setattr("gkm_bundle_parquet.compiled.load_column_set", no_load)
     assert cli(capsys, "verify", moved)[0] == 0
     assert cli(capsys, "rebuild", moved, "-o", tmp_path / "r.json")[0] == 0
     assert json.loads((tmp_path / "r.json").read_text()) == json.loads(source.read_text())
@@ -400,7 +400,7 @@ def test_fixed_specs_keep_their_list_and_look_at_no_schema_set(tmp_path, capsys,
     def no_load(*a, **k):
         raise AssertionError("a fixed spec must refuse from its own list")
 
-    monkeypatch.setattr("clinvar_gkm_parquet.schemas.fetch_set", no_load)
+    monkeypatch.setattr("gkm_bundle_parquet.schemas.fetch_set", no_load)
     bad = write_gz(tmp_path / "in" / "b.json.gz", bundle_bytes({"gene": fixture_sections()["gene"]}, "8.8.8"))
     rc, _, stderr = cli(capsys, "build", "--full", bad, "--spec", name, "--out", tmp_path / name)
     assert rc == 2 and "bundle schema_version 8.8.8 is not one table spec 1.0 reads (1.1.0)" in stderr
@@ -741,7 +741,7 @@ def test_verify_accepts_the_built_in_name_for_a_compiled_set(excerpt_set, capsys
 # What a move to another package takes: this path holds no producer's name or URL, and imports nothing that does.
 CORE = ("compiler", "schemas", "columnset", "bundle", "transport", "errors", "model")
 # The one neutral thing the scan allows: the tool's own distribution name, in one constant.
-ALLOWED_LINES = {("transport", 'TOOL_NAME = "clinvar-gkm-parquet"')}
+ALLOWED_LINES = {("transport", 'TOOL_NAME = "gkm-bundle-parquet"')}
 PRODUCER_WORDS = re.compile(r"clinvar|scv|vcv|\brcv\b|loc_start|civic|ncbi|clingen|bigquery", re.IGNORECASE)
 
 

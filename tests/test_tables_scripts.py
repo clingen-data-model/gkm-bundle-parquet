@@ -10,7 +10,7 @@ import pytest
 import yaml
 from _tables_helpers import SPEC, build, connect, read_fixture
 
-from clinvar_gkm_parquet.spec import parse_spec, spec_dir
+from gkm_bundle_parquet.spec import parse_spec, spec_dir
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 

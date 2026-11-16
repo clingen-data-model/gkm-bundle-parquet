@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run `validate` with both engines on one bundle and each schema set, and check every record's verdict agrees.
 
-For each schema set, `clinvar-gkm-parquet validate` runs once with `--engine rs` and once with `--engine python`,
+For each schema set, `gkm-bundle-parquet validate` runs once with `--engine rs` and once with `--engine python`,
 each writing its counts (`--json`) and its failing records (`--failures`). The verdicts agree when both runs read
 the same records per section and fail the same records (section and key). Any difference is printed with both
 engines' errors, and the script exits 1. Timings and counts go to <out>/summary.json and a Markdown table.
@@ -24,7 +24,7 @@ from pathlib import Path
 
 
 def run(bundle: str, schema: str, engine: str, out: Path, tag: str, args) -> dict:
-    cmd = [sys.executable, "-m", "clinvar_gkm_parquet.cli", "validate", bundle, "--bundle-schema", schema]
+    cmd = [sys.executable, "-m", "gkm_bundle_parquet.cli", "validate", bundle, "--bundle-schema", schema]
     cmd += [
         "--engine",
         engine,

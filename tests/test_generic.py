@@ -26,10 +26,10 @@ import yaml
 from _fixture import FIXTURE, SOURCE_RELEASE
 from _tables_helpers import SPEC, connect, read_fixture
 
-from clinvar_gkm_parquet import baseline, sqltemplate
-from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.errors import SpecError
-from clinvar_gkm_parquet.spec import parse_spec, resolve_spec
+from gkm_bundle_parquet import baseline, sqltemplate
+from gkm_bundle_parquet.cli import main
+from gkm_bundle_parquet.errors import SpecError
+from gkm_bundle_parquet.spec import parse_spec, resolve_spec
 
 CUSTOM = Path(__file__).parent / "fixtures" / "custom-spec" / "tables.yaml"
 FULL = ["--full", FIXTURE, "--full-source-release", SOURCE_RELEASE]
@@ -279,7 +279,7 @@ def test_custom_spec_as_the_driver_spec(tmp_path, capsys):
     assert set(_rows(out / "variation_summary.parquet", ["name"])) == want["variation"] != set()
     con = duckdb.connect()
     kv = dict(con.execute(f"SELECT key, value FROM parquet_kv_metadata('{out}/scv_summary.parquet')").fetchall())
-    selection = json.loads(kv[b"clinvar_gkm_parquet.selection"])
+    selection = json.loads(kv[b"gkm_bundle_parquet.selection"])
     assert (selection["driver"], selection["where"]) == ("scv_summary", where)
     assert cli(capsys, "verify", out, "--spec", CUSTOM)[0] == 0
 

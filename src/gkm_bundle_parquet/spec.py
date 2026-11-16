@@ -104,7 +104,7 @@ empty at every depth, as at the top level), and every row is written back as JSO
 line (key and record, byte for byte); any difference stops the build.
 
 `lossless: true`: the spec is a lossless encoding of the bundle's uncompressed text (ADR 0005), which
-`clinvar-gkm-parquet rebuild` writes back. Every table needs a `json` block and an `ordinal` column as its last
+`gkm-bundle-parquet rebuild` writes back. Every table needs a `json` block and an `ordinal` column as its last
 column; each section of each bundle schema_version has exactly one table, with no row filter and with
 `known_fields`; and the JSON layout must place every column (roundtrip.lossless_problems). A bundle
 schema_version's sections are its schema set's (schemas.sections_of).
@@ -219,7 +219,7 @@ _ROOT_KEYS = {"version_property", "other_values"}
 NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 VERSION_RE = re.compile(r"\d+\.\d+")
 
-# Where each built-in spec with a file lives under spec/ (source tree) or clinvar_gkm_parquet/_spec/ (wheel).
+# Where each built-in spec with a file lives under spec/ (source tree) or gkm_bundle_parquet/_spec/ (wheel).
 # clinvar-gkm is still at spec/<version>/; when it moves to spec/clinvar-gkm/<version>/, change its entry to
 # "clinvar-gkm/{version}".
 BUILTIN_DIRS: dict[str, str] = {
@@ -348,7 +348,7 @@ class SpecSource:
 
 
 def builtin_dir(name: str, version: str) -> Path:
-    """A built-in spec's directory: in the wheel under clinvar_gkm_parquet/_spec, or spec/ in a source tree."""
+    """A built-in spec's directory: in the wheel under gkm_bundle_parquet/_spec, or spec/ in a source tree."""
     if BUILTIN_SPECS.get(name) != version:
         have = ", ".join(f"{n} {v}" for n, v in BUILTIN_SPECS.items())
         raise SpecError(f"no built-in table spec {name} {version} (this tool has {have})")
@@ -698,7 +698,7 @@ def _json_layout(raw: object, col_names: set[str], tw: str) -> JsonLayout:
 
 
 def _has_sql_template(table_name: str) -> bool:
-    return resources.files("clinvar_gkm_parquet").joinpath("sql", f"{table_name}.sql").is_file()
+    return resources.files("gkm_bundle_parquet").joinpath("sql", f"{table_name}.sql").is_file()
 
 
 def _table_shape(t: Table) -> tuple:

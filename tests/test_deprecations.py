@@ -4,24 +4,17 @@ no written file changes (the byte-identity check of the release is in the PR; he
 
 from __future__ import annotations
 
-import json
-
 import pytest
 from _fixture import FIXTURE, FIXTURES
 
-from clinvar_gkm_parquet.cli import _parser, _warn_deprecations, main
-from clinvar_gkm_parquet.compat import version_info
+from gkm_bundle_parquet.cli import _parser, _warn_deprecations, main
 
-PREFIX = "clinvar-gkm-parquet: deprecated: "
+PREFIX = "gkm-bundle-parquet: deprecated: "
 CIVIC = FIXTURES / "civic"
 CIVIC_PAIRING = ["--bundle-schema", str(CIVIC / "schema-set"), "--column-set", str(CIVIC / "civic.columns.yaml")]
 CUSTOM_SPEC = str(FIXTURES / "custom-spec" / "tables.yaml")
 F = ["--full", "b.json.gz", "--out", "o"]
 
-NAME = (
-    "this tool is renamed gkm-bundle-parquet (https://github.com/clingen-data-model/gkm-bundle-parquet), and the "
-    "name clinvar-gkm-parquet is removed in 2.0.0; from 2.0.0, install gkm-bundle-parquet and run `{}`"
-)
 RELEASE = (
     "--{} is removed in 2.0.0; resolve the release yourself and pass one bundle with --full and --sha256, or a "
     "<file>.sha256 sidecar"
@@ -110,27 +103,6 @@ def test_each_deprecated_use_says_so_once(capsys, argv, want):
     assert warnings(capsys, argv) == want
 
 
-@pytest.mark.parametrize("command", ["version", "compile-spec"])
-def test_every_invocation_names_the_new_tool_first_and_stdout_is_unchanged(capsys, command):
-    rc = main(["version", "--json"] if command == "version" else ["compile-spec", *CIVIC_PAIRING])
-    got = capsys.readouterr()
-    assert rc == 0
-    assert got.err.splitlines()[0] == PREFIX + NAME.format(f"gkm-bundle-parquet {command}")
-    if command == "version":
-        assert json.loads(got.out) == json.loads(json.dumps(version_info()))
-    else:
-        assert got.out.startswith("# Table spec sections")
-
-
-def test_help_and_a_usage_error_name_the_new_tool_too(capsys):
-    for argv, code in ((["--help"], 0), (["build", "--no-such-option"], 2)):
-        with pytest.raises(SystemExit) as e:
-            main(argv)
-        assert e.value.code == code
-        run = "gkm-bundle-parquet build" if argv[0] == "build" else "gkm-bundle-parquet"
-        assert capsys.readouterr().err.splitlines()[0] == PREFIX + NAME.format(run)
-
-
 def test_a_deprecated_build_still_builds_with_the_same_exit_code_and_stdout(tmp_path, capsys):
     """The warnings come before the work and change nothing after it: the default build of the excerpt, with a
     deprecated option, prints what it printed before (the files themselves are compared in the release PR)."""
@@ -140,7 +112,6 @@ def test_a_deprecated_build_still_builds_with_the_same_exit_code_and_stdout(tmp_
     assert rc == 0
     assert got.out.startswith("built 20 table(s) of spec sections 1.0") and PREFIX not in got.out
     assert [line for line in got.err.splitlines() if line.startswith(PREFIX)] == [
-        PREFIX + NAME.format("gkm-bundle-parquet build"),
         PREFIX + RELEASE.format("full-source-release"),
         PREFIX + DEFAULT.format(PAIR),
     ]

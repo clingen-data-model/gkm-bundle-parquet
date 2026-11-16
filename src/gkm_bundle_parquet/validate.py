@@ -124,7 +124,7 @@ class _PythonEngine:
             from referencing.jsonschema import DRAFT202012
         except ImportError as e:
             raise ToolError(
-                f"--engine python needs the reference extra (pip install 'clinvar-gkm-parquet[reference]'): {e}"
+                f"--engine python needs the reference extra (pip install 'gkm-bundle-parquet[reference]'): {e}"
             ) from e
         resources = []
         for sid, f in schema_set.files.items():

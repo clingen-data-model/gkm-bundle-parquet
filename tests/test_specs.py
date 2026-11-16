@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from clinvar_gkm_parquet import compat
-from clinvar_gkm_parquet.default_pairing import sections_of
-from clinvar_gkm_parquet.errors import SpecError
-from clinvar_gkm_parquet.spec import (
+from gkm_bundle_parquet import compat
+from gkm_bundle_parquet.default_pairing import sections_of
+from gkm_bundle_parquet.errors import SpecError
+from gkm_bundle_parquet.spec import (
     SPEC_KV_KEYS,
     kv_metadata,
     load_spec,
@@ -100,14 +100,14 @@ def test_baseline_file_is_generated():
 
 
 def test_wheel_includes_the_spec_tree():
-    """The wheel force-includes spec/ as clinvar_gkm_parquet/_spec, so builtin_dir finds every built-in there."""
+    """The wheel force-includes spec/ as gkm_bundle_parquet/_spec, so builtin_dir finds every built-in there."""
     tomllib = pytest.importorskip("tomllib")  # Python 3.11+
     py = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert py["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]["spec"] == "clinvar_gkm_parquet/_spec"
+    assert py["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]["spec"] == "gkm_bundle_parquet/_spec"
     assert BASELINE_FILE.is_file() and CLINVAR_GKM_FILE.is_file() and (ROOT / "spec/sections/column-sets").is_dir()
     assert (
         py["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]["schemas"]
-        == "clinvar_gkm_parquet/_schemas"
+        == "gkm_bundle_parquet/_schemas"
     )
 
 

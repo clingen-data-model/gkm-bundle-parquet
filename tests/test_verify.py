@@ -8,13 +8,13 @@ import pytest
 from _build_helpers import KV, make_con, make_spec, passthrough_spec, passthrough_sql, render
 from _fixture import FIXTURE, SOURCE_RELEASE
 
-from clinvar_gkm_parquet import build as build_mod
-from clinvar_gkm_parquet import verify as verify_mod
-from clinvar_gkm_parquet.build import KV_KEYS, KV_PREFIX, build_tables
-from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.model import BuildInputs
-from clinvar_gkm_parquet.sources import resolve_input
-from clinvar_gkm_parquet.verify import (
+from gkm_bundle_parquet import build as build_mod
+from gkm_bundle_parquet import verify as verify_mod
+from gkm_bundle_parquet.build import KV_KEYS, KV_PREFIX, build_tables
+from gkm_bundle_parquet.cli import main
+from gkm_bundle_parquet.model import BuildInputs
+from gkm_bundle_parquet.sources import resolve_input
+from gkm_bundle_parquet.verify import (
     _json_first_diff,
     compare_dirs,
     recompute,
@@ -73,7 +73,7 @@ def test_verify_dir_finds_each_problem(built):
     assert "evB: evB.parquet is missing" in text
     assert "stray: stray.parquet is not a table of spec 9.9" in text
     assert "kv: schema: column name: file INTEGER != spec VARCHAR" in text
-    assert "clinvar_gkm_parquet.source_release differs across files" in text
+    assert "gkm_bundle_parquet.source_release differs across files" in text
     assert "manifest.json: thing rows 31 != file 30" in text
     assert "manifest.json: thing sha256 00 != file" in text
     assert len(problems) == 6, problems
@@ -83,7 +83,7 @@ def test_verify_dir_missing_metadata(built):
     spec, con, out = built
     _rewrite(con, out / "kv.parquet", "SELECT * FROM src")
     (problem,) = verify_dir(out, spec)
-    assert problem.startswith("kv: key-value metadata lacks clinvar_gkm_parquet.tool_version")
+    assert problem.startswith("kv: key-value metadata lacks gkm_bundle_parquet.tool_version")
     assert all(KV_PREFIX + k in problem for k in KV_KEYS)
 
 
@@ -315,9 +315,9 @@ def _file_kv(con, path) -> dict[str, str]:
 def test_cli_unreadable_parquet_is_an_input_error(tmp_path, capsys):
     # A truncated Parquet file raises duckdb.Error; the CLI reports it as an input error (exit 2), not as
     # differences (exit 1).
-    from clinvar_gkm_parquet.cli import main
-    from clinvar_gkm_parquet.compat import TABLE_SPEC_VERSION
-    from clinvar_gkm_parquet.spec import load_spec
+    from gkm_bundle_parquet.cli import main
+    from gkm_bundle_parquet.compat import TABLE_SPEC_VERSION
+    from gkm_bundle_parquet.spec import load_spec
 
     for t in load_spec(TABLE_SPEC_VERSION).tables:
         (tmp_path / t.file_name).write_bytes(b"PAR1 truncated")

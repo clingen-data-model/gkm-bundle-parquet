@@ -222,44 +222,6 @@ wheels = [
 ]
 
 [[package]]
-name = "clinvar-gkm-parquet"
-version = "1.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "duckdb" },
-    { name = "jsonschema-rs" },
-    { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-reference = [
-    { name = "ga4gh-gkm", marker = "python_full_version >= '3.11'" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ga4gh-gkm", marker = "python_full_version >= '3.11'" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "duckdb", specifier = "==1.5.4" },
-    { name = "ga4gh-gkm", marker = "python_full_version >= '3.11' and extra == 'reference'", specifier = "==0.4.0" },
-    { name = "jsonschema-rs", specifier = "==0.61.1" },
-    { name = "pyyaml", specifier = ">=6.0" },
-]
-provides-extras = ["reference"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "ga4gh-gkm", marker = "python_full_version >= '3.11'", specifier = "==0.4.0" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "ruff", specifier = ">=0.6" },
-]
-
-[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -380,6 +342,44 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d3/58/e744383963d43e350a3369b79c02a3ad898b86e9a290fc02bf08aec2743b/ga4gh_vrs-2.4.0a6.tar.gz", hash = "sha256:be68882acb659ef25af8b154440c54619e9a921993bae82feb336fd78d2588c3", size = 16648672 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2d/d1/9f125cba68e59fe3997f86b4a2bdc0ea8f53ef213be01f2eab0fb745bf24/ga4gh_vrs-2.4.0a6-py3-none-any.whl", hash = "sha256:ce6850338ecea7819a5aa49504d0bfe15a1211694e199f20a09139c14f490080", size = 67921 },
+]
+
+[[package]]
+name = "gkm-bundle-parquet"
+version = "1.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "duckdb" },
+    { name = "jsonschema-rs" },
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+reference = [
+    { name = "ga4gh-gkm", marker = "python_full_version >= '3.11'" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ga4gh-gkm", marker = "python_full_version >= '3.11'" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "duckdb", specifier = "==1.5.4" },
+    { name = "ga4gh-gkm", marker = "python_full_version >= '3.11' and extra == 'reference'", specifier = "==0.4.0" },
+    { name = "jsonschema-rs", specifier = "==0.61.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
+provides-extras = ["reference"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ga4gh-gkm", marker = "python_full_version >= '3.11'", specifier = "==0.4.0" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.6" },
 ]
 
 [[package]]

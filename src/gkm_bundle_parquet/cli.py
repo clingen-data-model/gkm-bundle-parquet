@@ -66,8 +66,9 @@ def _engine(p: argparse.ArgumentParser) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="clinvar-gkm-parquet",
-        description="Rebuild ClinVar-GKM's Parquet tables from its published JSON bundles.",
+        prog="gkm-bundle-parquet",
+        description="Build Parquet tables from GKM JSON bundles, rebuild the bundle from them, and validate "
+        "bundles.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -185,10 +186,7 @@ def _parser() -> argparse.ArgumentParser:
 
 # --- deprecations (ADR 0009 decision 5, ADR 0008 decision 2): what 2.0.0 removes, a line each on stderr -----
 
-NEW_NAME = "gkm-bundle-parquet"
-NEW_REPOSITORY = "https://github.com/clingen-data-model/gkm-bundle-parquet"
 REMOVED_IN = "2.0.0"
-COMMANDS = ("build", "select", "rebuild", "verify", "compile-spec", "validate", "version")
 RELEASE_OPTIONS = ("release", "index", "delta", "manifest", "full_source_release")
 RETIRED_SPECS = {
     "clinvar-gkm": "the 22-table set",
@@ -197,18 +195,7 @@ RETIRED_SPECS = {
 
 
 def _deprecated(message: str) -> None:
-    print(f"clinvar-gkm-parquet: deprecated: {message}", file=sys.stderr, flush=True)
-
-
-def _warn_old_name(argv: list[str]) -> None:
-    """Every invocation, before the arguments are parsed (so --help and a usage error say it too)."""
-    command = next((a for a in argv if not a.startswith("-")), None)
-    command = command if command in COMMANDS else None
-    run = f"{NEW_NAME} {command}" if command else NEW_NAME
-    _deprecated(
-        f"this tool is renamed {NEW_NAME} ({NEW_REPOSITORY}), and the name clinvar-gkm-parquet is removed in "
-        f"{REMOVED_IN}; from {REMOVED_IN}, install {NEW_NAME} and run `{run}`"
-    )
+    print(f"gkm-bundle-parquet: deprecated: {message}", file=sys.stderr, flush=True)
 
 
 def _retired_spec(arg: str) -> str | None:
@@ -269,7 +256,7 @@ def _version(args: argparse.Namespace) -> int:
             for s in info["table_specs"]
         )
         print(
-            f"clinvar-gkm-parquet {info['tool_version']}: built-in table specs {specs}; "
+            f"gkm-bundle-parquet {info['tool_version']}: built-in table specs {specs}; "
             f"duckdb {info['duckdb_version']}\n{info['schema_version_rule']} Snapshotted: "
             f"{', '.join(info['snapshotted_schema_versions'])}. "
             + "; ".join(
@@ -330,7 +317,6 @@ def _validate(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    _warn_old_name(argv)
     args = _parser().parse_args(argv)
     _warn_deprecations(args)
     handler = {
@@ -347,12 +333,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return handler(args)
     except ToolError as e:
-        print(f"clinvar-gkm-parquet: error: {e}", file=sys.stderr)
+        print(f"gkm-bundle-parquet: error: {e}", file=sys.stderr)
         return 2
     except (
         duckdb.Error
     ) as e:  # e.g. an unreadable or truncated Parquet or staging file: an input error, not a diff
-        print(f"clinvar-gkm-parquet: error: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"gkm-bundle-parquet: error: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
 

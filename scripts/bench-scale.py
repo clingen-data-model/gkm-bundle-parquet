@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark `clinvar-gkm-parquet build` on a scaled bundle made from the real excerpt's records.
+"""Benchmark `gkm-bundle-parquet build` on a scaled bundle made from the real excerpt's records.
 
 Makes a full bundle from the records of tests/fixtures/real-1.1.0/clinvar-gkm_excerpt.json.gz. Each section's
 records are replicated in proportion to that section's record count in the real full the excerpt was cut from
@@ -19,7 +19,7 @@ With --deltas it also writes 2 synthetic deltas (+ manifests in build-delta-mani
 adds and deletes about 0.5 % of each section's keys (an update carries another record of the same section and,
 for evidence lines, of the same id shape).
 
-Then it runs the build as a subprocess (this interpreter, `-m clinvar_gkm_parquet.cli build`) and records: wall
+Then it runs the build as a subprocess (this interpreter, `-m gkm_bundle_parquet.cli build`) and records: wall
 time; peak RSS of the child (os.wait4); peak disk, sampled every 0.5 s as the allocated bytes under the build's
 work and output directories (the input bundle is not counted); and the output size. Scratch data lives in a new
 temporary directory under --dir and is deleted afterwards unless --keep.
@@ -249,7 +249,7 @@ def main() -> int:
             flush=True,
         )
         out, work = scratch / "out", scratch / "work"
-        cmd = [sys.executable, "-m", "clinvar_gkm_parquet.cli", "build", "--full", str(full)]
+        cmd = [sys.executable, "-m", "gkm_bundle_parquet.cli", "build", "--full", str(full)]
         cmd += ["--full-source-release", FULL_SOURCE_RELEASE, "--out", str(out), "--work-dir", str(work)]
         for d in deltas:
             cmd += ["--delta", str(d)]

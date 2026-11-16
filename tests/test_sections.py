@@ -21,11 +21,11 @@ import pytest
 from _tables_helpers import SPEC as CLINVAR_GKM
 from _tables_helpers import connect, read_fixture, rows
 
-from clinvar_gkm_parquet import baseline, build, compat, sqltemplate
-from clinvar_gkm_parquet.default_pairing import sections_of
-from clinvar_gkm_parquet.errors import SpecError
-from clinvar_gkm_parquet.spec import RANGE_KINDS, parse_spec, resolve_spec
-from clinvar_gkm_parquet.sqltemplate import canonical_type, render_generic
+from gkm_bundle_parquet import baseline, build, compat, sqltemplate
+from gkm_bundle_parquet.default_pairing import sections_of
+from gkm_bundle_parquet.errors import SpecError
+from gkm_bundle_parquet.spec import RANGE_KINDS, parse_spec, resolve_spec
+from gkm_bundle_parquet.sqltemplate import canonical_type, render_generic
 
 SPEC, SOURCE = resolve_spec("sections", "1.1.0")
 BASE = read_fixture()
@@ -543,7 +543,7 @@ def test_at_most_one_record_column():
     raw = _one_table(type="VARCHAR", derivation={"kind": "record", "path": None, "transform": None})
     assert parse_spec(raw).tables[0].columns_of("record")
     raw["tables"][0]["columns"].append({**raw["tables"][0]["columns"][1], "name": "y"})
-    from clinvar_gkm_parquet.spec import check_rules
+    from gkm_bundle_parquet.spec import check_rules
 
     with pytest.raises(SpecError, match="2 record columns"):
         check_rules(parse_spec(raw))

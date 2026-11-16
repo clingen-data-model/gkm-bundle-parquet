@@ -1,8 +1,8 @@
 import pytest
 
-from clinvar_gkm_parquet.compat import TABLE_SPEC_VERSION
-from clinvar_gkm_parquet.errors import SpecError
-from clinvar_gkm_parquet.spec import load_spec, parse_spec
+from gkm_bundle_parquet.compat import TABLE_SPEC_VERSION
+from gkm_bundle_parquet.errors import SpecError
+from gkm_bundle_parquet.spec import load_spec, parse_spec
 
 
 def test_spec_loads_and_matches_compat():

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import duckdb
 
-from clinvar_gkm_parquet.spec import Spec, load_spec, spec_dir
+from gkm_bundle_parquet.spec import Spec, load_spec, spec_dir
 
 
 def _q(name: str) -> str:

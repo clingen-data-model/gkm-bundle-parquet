@@ -12,7 +12,7 @@ import duckdb
 import pytest
 from _tables_helpers import SPEC, build, connect, describe, read_fixture, rows
 
-from clinvar_gkm_parquet.sqltemplate import canonical_type, render
+from gkm_bundle_parquet.sqltemplate import canonical_type, render
 
 RECORDS = read_fixture()
 TABLES = [t.name for t in SPEC.tables]

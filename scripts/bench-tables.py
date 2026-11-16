@@ -35,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 from _fixture import PROVENANCE  # noqa: E402
 from _tables_helpers import SECTIONS, read_fixture  # noqa: E402
 
-from clinvar_gkm_parquet.spec import load_spec  # noqa: E402
-from clinvar_gkm_parquet.sqltemplate import macros_sql, render  # noqa: E402
+from gkm_bundle_parquet.spec import load_spec  # noqa: E402
+from gkm_bundle_parquet.sqltemplate import macros_sql, render  # noqa: E402
 
 
 def load(

@@ -22,11 +22,11 @@ import os
 import sys
 from multiprocessing import get_context
 
-from clinvar_gkm_parquet import sources
-from clinvar_gkm_parquet.bundle import BundleShape, RootRules, stream_bundle
-from clinvar_gkm_parquet.compiler import root_parts
-from clinvar_gkm_parquet.default_pairing import schema_source, version_property
-from clinvar_gkm_parquet.schemas import load_schema_set
+from gkm_bundle_parquet import sources
+from gkm_bundle_parquet.bundle import BundleShape, RootRules, stream_bundle
+from gkm_bundle_parquet.compiler import root_parts
+from gkm_bundle_parquet.default_pairing import schema_source, version_property
+from gkm_bundle_parquet.schemas import load_schema_set
 
 BATCH = 2000
 

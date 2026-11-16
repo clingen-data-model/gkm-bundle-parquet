@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 
-from clinvar_gkm_parquet.default_pairing import sections_of
+from gkm_bundle_parquet.default_pairing import sections_of
 
 FIXTURES = Path(__file__).parent / "fixtures"
 REAL = FIXTURES / "real-1.1.0" / "clinvar-gkm_excerpt.json.gz"

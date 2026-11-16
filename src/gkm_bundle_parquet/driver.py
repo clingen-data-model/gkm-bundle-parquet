@@ -18,7 +18,7 @@ picks the record source and runs the engine:
   pairing (`--bundle-schema`, `--column-set`), the source's root is read by the pairing's rules: its version
   property, if any, and its sections (ADR 0008 decision 4.1, ADR 0009); without one, by the default bundle's.
 - **Provenance.** `driver`, `where` and `ids_sha256` (select.ids_sha256 of the explicit keys, or null) join the
-  engine's parameters in `SelectionResult.metadata_json()`, the `clinvar_gkm_parquet.selection` entry.
+  engine's parameters in `SelectionResult.metadata_json()`, the `gkm_bundle_parquet.selection` entry.
 
 A build with no driver never calls into this module beyond checking that no selection option was given: the full
 build, and so the BigQuery-parity build, is untouched.
@@ -43,7 +43,8 @@ from .model import BuildInputs, InputFile, StreamedBundle
 from .select import SelectionError, SelectionResult
 from .spec import Spec, Table, is_compiled, resolve_spec
 
-SELECTION_BUNDLE_NAME = "clinvar-gkm_selection.json.gz"  # the mini-bundle a build writes in its work directory
+# The mini-bundle a build writes in its work directory.
+SELECTION_BUNDLE_NAME = "gkm-bundle-parquet_selection.json.gz"
 
 
 @dataclass(frozen=True)
@@ -302,7 +303,7 @@ def run_selection(
 
 
 def run_select_command(args) -> int:
-    """`clinvar-gkm-parquet select`: write only the mini-bundle, and print the selection entry a build from it
+    """`gkm-bundle-parquet select`: write only the mini-bundle, and print the selection entry a build from it
     would carry. The same inputs and options give the same bytes."""
     spec_arg = getattr(args, "spec", None)
     if not is_compiled(spec_arg):

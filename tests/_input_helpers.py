@@ -14,7 +14,7 @@ from pathlib import Path
 
 from _fixture import FIXTURE, PROVENANCE_PATH
 
-from clinvar_gkm_parquet.model import InputFile
+from gkm_bundle_parquet.model import InputFile
 
 PROVENANCE = PROVENANCE_PATH
 

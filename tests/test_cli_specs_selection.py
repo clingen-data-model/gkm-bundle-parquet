@@ -20,11 +20,11 @@ import yaml
 from _fixture import FIXTURE, SECTIONS, SOURCE_RELEASE
 from _input_helpers import D1, D2, bundle_bytes, fixture_sections, local_input, two_synthetic_deltas, write_gz
 
-from clinvar_gkm_parquet import select as sel
-from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.model import BuildInputs
-from clinvar_gkm_parquet.replay import ReplayedSource, load_chain
-from clinvar_gkm_parquet.spec import builtin_dir, resolve_spec
+from gkm_bundle_parquet import select as sel
+from gkm_bundle_parquet.cli import main
+from gkm_bundle_parquet.model import BuildInputs
+from gkm_bundle_parquet.replay import ReplayedSource, load_chain
+from gkm_bundle_parquet.spec import builtin_dir, resolve_spec
 
 FULL = ["--full", FIXTURE, "--full-source-release", SOURCE_RELEASE]
 FIXTURE_SHA = (FIXTURE.parent / (FIXTURE.name + ".sha256")).read_text().split()[0]
@@ -42,7 +42,7 @@ def cli(capsys, *args) -> tuple[int, str, str]:
 
 def kv(path: Path) -> dict[str, str]:
     rows = duckdb.connect().execute(f"SELECT key, value FROM parquet_kv_metadata('{path}')").fetchall()
-    p = "clinvar_gkm_parquet."
+    p = "gkm_bundle_parquet."
     return {k.decode()[len(p) :]: v.decode() for k, v in rows if k.decode().startswith(p)}
 
 

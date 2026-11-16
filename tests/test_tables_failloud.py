@@ -14,8 +14,8 @@ import duckdb
 import pytest
 from _tables_helpers import SPEC, build, connect, read_fixture
 
-from clinvar_gkm_parquet.errors import SpecError
-from clinvar_gkm_parquet.sqltemplate import render
+from gkm_bundle_parquet.errors import SpecError
+from gkm_bundle_parquet.sqltemplate import render
 
 BASE = read_fixture()
 

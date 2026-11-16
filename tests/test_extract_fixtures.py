@@ -17,9 +17,9 @@ import pytest
 from _fixture import FIXTURE, PROVENANCE
 from _tables_helpers import read_fixture, write_bundle
 
-from clinvar_gkm_parquet.bundle import stage_bundle
-from clinvar_gkm_parquet.default_pairing import reader_rules
-from clinvar_gkm_parquet.model import InputFile
+from gkm_bundle_parquet.bundle import stage_bundle
+from gkm_bundle_parquet.default_pairing import reader_rules
+from gkm_bundle_parquet.model import InputFile
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "extract-fixtures.py"
 _spec = importlib.util.spec_from_file_location("extract_fixtures", SCRIPT)
@@ -197,7 +197,7 @@ def test_every_shape_is_reported(tmp_path):
 
 
 def test_extension_shapes_cover_the_spec_slot_maps():
-    from clinvar_gkm_parquet.spec import load_spec
+    from gkm_bundle_parquet.spec import load_spec
 
     names = {s.name for s in xf.shapes() if s.extension}
     want = {

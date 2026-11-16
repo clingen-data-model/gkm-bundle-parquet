@@ -41,7 +41,7 @@ from .build import (
     table_groups,
 )
 from .bundle import ROOT_VALUES_TABLE
-from .compat import PUBLISHED_SPEC, TABLE_SPEC_VERSION
+from .compat import KV_PREFIXES, PUBLISHED_SPEC, TABLE_SPEC_VERSION
 from .compiled import is_recorded, recorded_spec
 from .errors import InputError, SpecError, ToolError
 from .model import BuildInputs
@@ -64,19 +64,21 @@ def _pq(path: Path) -> str:
 
 
 def read_kv(con: duckdb.DuckDBPyConnection, path: Path) -> dict[str, str]:
-    """The clinvar_gkm_parquet.* key-value metadata of one file, prefix removed."""
+    """The tool's key-value metadata of one file, prefix removed: gkm_bundle_parquet.*, or clinvar_gkm_parquet.* in
+    a file written by 1.x (compat.KV_PREFIXES)."""
     rows = con.execute(f"SELECT key, value FROM parquet_kv_metadata({sql_str(str(path))})").fetchall()
     out = {}
     for k, v in rows:
         k = k.decode() if isinstance(k, bytes) else k
         v = v.decode() if isinstance(v, bytes) else v
-        if k.startswith(KV_PREFIX):
-            out[k[len(KV_PREFIX) :]] = v
+        prefix = next((p for p in KV_PREFIXES if k.startswith(p)), None)
+        if prefix is not None:
+            out[k[len(prefix) :]] = v
     return out
 
 
 def dir_kv(con: duckdb.DuckDBPyConnection, out_dir: Path) -> dict[str, dict[str, str]]:
-    """file name -> its clinvar_gkm_parquet.* key-value metadata, for every .parquet in the directory."""
+    """file name -> its gkm_bundle_parquet.* key-value metadata, for every .parquet in the directory."""
     return {p.name: read_kv(con, p) for p in sorted(Path(out_dir).glob("*.parquet"))}
 
 
@@ -121,11 +123,11 @@ def spec_for_dir(con: duckdb.DuckDBPyConnection, out_dir: Path, spec_arg: str | 
 
 
 def dir_selection(kvs: dict[str, dict[str, str]]) -> str | None:
-    """The files' clinvar_gkm_parquet.selection entry (ADR 0004): None for a full build. Files that disagree
+    """The files' gkm_bundle_parquet.selection entry (ADR 0004): None for a full build. Files that disagree
     (some with one, some without, or different ones) are an error: one directory holds one set."""
     values = {kv.get("selection") for kv in kvs.values()}
     if len(values) > 1:
-        raise SpecError("the files disagree on clinvar_gkm_parquet.selection: they are not one set")
+        raise SpecError("the files disagree on gkm_bundle_parquet.selection: they are not one set")
     return values.pop() if values else None
 
 
@@ -721,7 +723,7 @@ class VerifyReport:
         }
 
     def to_markdown(self) -> str:
-        lines = [f"# clinvar-gkm-parquet verify: {self.dir}", ""]
+        lines = [f"# gkm-bundle-parquet verify: {self.dir}", ""]
         spec = f"{self.spec_name} {self.spec_version}" if self.spec_name else self.spec_version
         subset = ""
         if self.selection is not None:
@@ -839,12 +841,12 @@ def write_report(report: VerifyReport, path: Path) -> tuple[Path, Path]:
 
 
 def _usage(msg: str) -> int:
-    print(f"clinvar-gkm-parquet verify: error: {msg}", file=sys.stderr)
+    print(f"gkm-bundle-parquet verify: error: {msg}", file=sys.stderr)
     return 2
 
 
 def run_verify_command(args) -> int:
-    """`clinvar-gkm-parquet verify`: returns the exit code."""
+    """`gkm-bundle-parquet verify`: returns the exit code."""
     out_dir = Path(args.dir)
     if not out_dir.is_dir():
         return _usage(f"{out_dir}: not a directory")
@@ -869,7 +871,7 @@ def run_verify_command(args) -> int:
         if params is not None:
             return _usage(
                 f"--against compares a full build with the published set; {out_dir} is a selection (driver "
-                f"{params.get('driver')}, clinvar_gkm_parquet.selection)"
+                f"{params.get('driver')}, gkm_bundle_parquet.selection)"
             )
         written_by = {
             (kv.get("table_spec", PUBLISHED_SPEC), kv.get("table_spec_builtin", "true")) for kv in kvs.values()
@@ -886,14 +888,14 @@ def run_verify_command(args) -> int:
             inputs = resolve_build_inputs(args)
         else:
             # A selection is recomputed against its mini-bundle (ADR 0004): `--full` names it, and its sha256
-            # must be the recorded selected_sha256. `clinvar-gkm-parquet select` with the recorded options
+            # must be the recorded selected_sha256. `gkm-bundle-parquet select` with the recorded options
             # regenerates it byte for byte.
             expected = params["selected_sha256"]
             if args.delta or args.manifest:
                 return _usage(
                     "these files are a selection: recompute against the mini-bundle alone (--full <mini-bundle>, "
-                    "no --delta); it holds the replayed state. Regenerate it with `clinvar-gkm-parquet select` "
-                    "and the options recorded in clinvar_gkm_parquet.selection"
+                    "no --delta); it holds the replayed state. Regenerate it with `gkm-bundle-parquet select` "
+                    "and the options recorded in gkm_bundle_parquet.selection"
                 )
             if args.sha256 and args.sha256.lower() != expected:
                 return _usage(f"--sha256 {args.sha256} is not the selection's selected_sha256 {expected}")
@@ -906,7 +908,7 @@ def run_verify_command(args) -> int:
                 work_dir=args.work_dir,
                 memory_limit=args.memory_limit,
                 threads=args.threads,
-                log=lambda m: print(f"clinvar-gkm-parquet: {m}", file=sys.stderr, flush=True),
+                log=lambda m: print(f"gkm-bundle-parquet: {m}", file=sys.stderr, flush=True),
             )
         except InputError as e:
             if params is not None and "sha256 mismatch" in str(e):
@@ -929,7 +931,7 @@ def run_verify_command(args) -> int:
         )
     if args.against is not None:
         root = Path(args.work_dir) if args.work_dir else None
-        tmp = Path(tempfile.mkdtemp(prefix="clinvar-gkm-parquet-oracle-", dir=root))
+        tmp = Path(tempfile.mkdtemp(prefix="gkm-bundle-parquet-oracle-", dir=root))
         try:
             con = duckdb.connect()
             configure(con, memory_limit=args.memory_limit, threads=args.threads, temp_directory=tmp)

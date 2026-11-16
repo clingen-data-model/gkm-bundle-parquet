@@ -1,7 +1,7 @@
 import json
 
-from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.compat import TABLE_SPEC_VERSION
+from gkm_bundle_parquet.cli import main
+from gkm_bundle_parquet.compat import TABLE_SPEC_VERSION
 
 
 def test_version_json(capsys):

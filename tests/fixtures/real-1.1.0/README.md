@@ -70,7 +70,7 @@ resumes with `Range`):
 ```sh
 URL=<https URL of the 2026-10-18 full>
 env -u VIRTUAL_ENV uv run python scripts/extract-fixtures.py "$URL" --source-url "$URL" --release 2026-10-18 \
-  --sha256 "$(curl -sfA 'clinvar-gkm-parquet fixture extractor' "$URL.sha256" | cut -d' ' -f1)"
+  --sha256 "$(curl -sfA 'gkm-bundle-parquet fixture extractor' "$URL.sha256" | cut -d' ' -f1)"
 ```
 
 A GCS stream, with no local copy:

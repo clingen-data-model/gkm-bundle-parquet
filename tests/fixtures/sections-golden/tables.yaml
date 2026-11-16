@@ -1,8 +1,8 @@
 # Golden: what the sections compiler must reproduce on bundle schema 1.1.0. tests/test_compiler.py compares every table
 # of the compiled spec with this file. It is not what a build loads: `sections` is compiled from the bundle's schema set
-# (src/clinvar_gkm_parquet/compiler.py, ADR 0006). It was the hand-researched spec file until then, and is kept as the
+# (src/gkm_bundle_parquet/compiler.py, ADR 0006). It was the hand-researched spec file until then, and is kept as the
 # independent statement of the 1.1.0 tables; its text below is what that research found. Format:
-# src/clinvar_gkm_parquet/spec.py.
+# src/gkm_bundle_parquet/spec.py.
 #
 # status: draft. ClinVar-GKM defines the columns: they are the superset of the properties, and of the value
 # shapes, that the ClinVar-GKM producer emits for each section under bundle schema_version 1.1.0 (procedures,
@@ -12,12 +12,12 @@
 # this spec lacks stops the build (no row or value is dropped).
 #
 # Lossless (ADR 0005, `lossless: true`): a full build of one bundle is a lossless encoding of the bundle's
-# uncompressed text. `clinvar-gkm-parquet rebuild <dir> -o <bundle.json[.gz]>` writes the text back byte for
+# uncompressed text. `gkm-bundle-parquet rebuild <dir> -o <bundle.json[.gz]>` writes the text back byte for
 # byte, from what this spec states: the `ordinal` column (record order), each table's `json` block (key order,
 # own `id`), every pointer's `targets` (and `<column>_section` for the multi-target ones), the range columns.
 # The build checks it row by row: each row is written back as JSON and compared with its bundle line, key text
 # included, and any difference stops the build. It records the sha256 of each section's record lines
-# (clinvar_gkm_parquet.section_text_sha256) and of the whole text (manifest source_text_sha256), which rebuild
+# (gkm_bundle_parquet.section_text_sha256) and of the whole text (manifest source_text_sha256), which rebuild
 # checks. Checked 2026-10-30: the excerpt and the 2026-09-23 weekly delta (4,530,457 records, 2,682,864,605 bytes
 # of text, sha256 fb247dc2f520852c5b8c643b9dd68aa310ab8f45ea9db3d371fce55ada126835) build and rebuild to the
 # identical text.

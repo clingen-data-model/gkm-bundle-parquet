@@ -8,10 +8,10 @@ import hashlib
 from _fixture import FIXTURE
 from _tables_helpers import SPEC, read_fixture
 
-from clinvar_gkm_parquet import build as build_mod
-from clinvar_gkm_parquet.build import build
-from clinvar_gkm_parquet.model import BuildInputs, InputFile
-from clinvar_gkm_parquet.verify import recompute, recompute_failed, verify_dir
+from gkm_bundle_parquet import build as build_mod
+from gkm_bundle_parquet.build import build
+from gkm_bundle_parquet.model import BuildInputs, InputFile
+from gkm_bundle_parquet.verify import recompute, recompute_failed, verify_dir
 
 
 def _inputs(path):

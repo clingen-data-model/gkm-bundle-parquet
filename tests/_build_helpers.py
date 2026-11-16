@@ -12,7 +12,7 @@ import json
 import duckdb
 from _fixture import SECTIONS
 
-from clinvar_gkm_parquet.spec import Spec, Table, parse_spec
+from gkm_bundle_parquet.spec import Spec, Table, parse_spec
 
 
 def _col(name, type_, kind, path=None, nulls="when-absent"):

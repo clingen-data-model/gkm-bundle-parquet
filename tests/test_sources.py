@@ -14,10 +14,10 @@ import urllib.error
 import pytest
 from _input_helpers import FIXTURE, delta_manifest_json, local_input, sha256_of
 
-from clinvar_gkm_parquet import transport
-from clinvar_gkm_parquet.errors import InputError
-from clinvar_gkm_parquet.model import InputFile
-from clinvar_gkm_parquet.sources import (
+from gkm_bundle_parquet import transport
+from gkm_bundle_parquet.errors import InputError
+from gkm_bundle_parquet.model import InputFile
+from gkm_bundle_parquet.sources import (
     load_index,
     load_manifest,
     open_stream,
@@ -25,7 +25,7 @@ from clinvar_gkm_parquet.sources import (
     resolve_input,
     resolve_release,
 )
-from clinvar_gkm_parquet.transport import USER_AGENT
+from gkm_bundle_parquet.transport import USER_AGENT
 
 BASE = "https://data.clinvar-gkm.org"
 L = "v1/1.1/"

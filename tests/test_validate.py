@@ -20,11 +20,11 @@ from _fixture import COUNTS, FIXTURE, FIXTURES
 from _input_helpers import bundle_bytes, fixture_sections, write_gz
 from _validate_cases import UNDECLARED, ban_cases, banned_properties, list_item_cases, nodes, record_cases, records
 
-from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.default_pairing import schema_source
-from clinvar_gkm_parquet.errors import SchemaSetError
-from clinvar_gkm_parquet.schemas import SchemaFile, SchemaSet, load_schema_set, read_set
-from clinvar_gkm_parquet.validate import make_engine
+from gkm_bundle_parquet.cli import main
+from gkm_bundle_parquet.default_pairing import schema_source
+from gkm_bundle_parquet.errors import SchemaSetError
+from gkm_bundle_parquet.schemas import SchemaFile, SchemaSet, load_schema_set, read_set
+from gkm_bundle_parquet.validate import make_engine
 
 NARROWED = FIXTURES / "schema-sets" / "clinvar-gkm-narrowed-a956b5a"
 NARROWED_COMMIT = "a956b5a4dbba3ee9f6954101d0b726ebedae6d4b"

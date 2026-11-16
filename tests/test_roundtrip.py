@@ -21,14 +21,14 @@ from _fixture import FIXTURE, GOLDEN_SECTIONS_SPEC, SOURCE_RELEASE
 from _input_helpers import local_input, synthetic_delta
 from _tables_helpers import connect, read_fixture
 
-from clinvar_gkm_parquet import bundle
-from clinvar_gkm_parquet.build import EMPTY_SHA256, KV_PREFIX
-from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.default_pairing import reader_rules, sections_of
-from clinvar_gkm_parquet.errors import RoundTripError, SpecError
-from clinvar_gkm_parquet.roundtrip import RoundTripMismatch, lossless_problems, rebuild, record_sql
-from clinvar_gkm_parquet.spec import parse_spec, resolve_spec
-from clinvar_gkm_parquet.sqltemplate import render_generic
+from gkm_bundle_parquet import bundle
+from gkm_bundle_parquet.build import EMPTY_SHA256, KV_PREFIX
+from gkm_bundle_parquet.cli import main
+from gkm_bundle_parquet.default_pairing import reader_rules, sections_of
+from gkm_bundle_parquet.errors import RoundTripError, SpecError
+from gkm_bundle_parquet.roundtrip import RoundTripMismatch, lossless_problems, rebuild, record_sql
+from gkm_bundle_parquet.spec import parse_spec, resolve_spec
+from gkm_bundle_parquet.sqltemplate import render_generic
 
 SPEC, _ = resolve_spec("sections", "1.1.0")
 TEXT = gzip.decompress(FIXTURE.read_bytes())
@@ -125,7 +125,7 @@ def _raw_sections() -> dict:
     ],
 )
 def test_lossless_spec_rules(change, message):
-    from clinvar_gkm_parquet.spec import check_compiled
+    from gkm_bundle_parquet.spec import check_compiled
 
     raw = _raw_sections()
     change(raw)

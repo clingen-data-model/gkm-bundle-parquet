@@ -15,8 +15,8 @@ from pathlib import Path
 import duckdb
 from _fixture import FIXTURE
 
-from clinvar_gkm_parquet.spec import Table, load_spec
-from clinvar_gkm_parquet.sqltemplate import macros_sql, render
+from gkm_bundle_parquet.spec import Table, load_spec
+from gkm_bundle_parquet.sqltemplate import macros_sql, render
 
 SPEC = load_spec("1.0")
 # The 20 sections of the 1.1.0 bundle schema (design plan §4.2).

@@ -23,7 +23,7 @@ from .model import InputFile
 
 log = logging.getLogger(__name__)
 
-TOOL_NAME = "clinvar-gkm-parquet"  # the distribution's name: the User-Agent and the cache folder say it
+TOOL_NAME = "gkm-bundle-parquet"  # the distribution's name: the User-Agent and the cache folder say it
 USER_AGENT = f"{TOOL_NAME}/{__version__}"
 MAX_ATTEMPTS = 8
 TIMEOUT_S = 60

@@ -16,7 +16,7 @@ import duckdb
 import pytest
 from _tables_helpers import SPEC, build, connect, read_fixture, rows
 
-from clinvar_gkm_parquet.sqltemplate import render
+from gkm_bundle_parquet.sqltemplate import render
 
 BASE = read_fixture()
 CENSUS = [t.name for t in SPEC.tables if " AS _ok FROM " in render(t)]  # the tables whose source takes a census

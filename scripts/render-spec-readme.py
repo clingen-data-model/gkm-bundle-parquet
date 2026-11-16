@@ -18,7 +18,7 @@ import sys
 import duckdb
 import yaml
 
-from clinvar_gkm_parquet.spec import parse_spec, spec_dir
+from gkm_bundle_parquet.spec import parse_spec, spec_dir
 
 _TABLE = re.compile(r"^  - name: (\S+)\s*$")
 _COLUMN = re.compile(r"^      - name: (\S+)\s*$")

@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from clinvar_gkm_parquet.default_pairing import schema_source
-from clinvar_gkm_parquet.errors import SchemaSetError
-from clinvar_gkm_parquet.schemas import (
+from gkm_bundle_parquet.default_pairing import schema_source
+from gkm_bundle_parquet.errors import SchemaSetError
+from gkm_bundle_parquet.schemas import (
     MANIFEST,
     fetch_set,
     load_schema_set,

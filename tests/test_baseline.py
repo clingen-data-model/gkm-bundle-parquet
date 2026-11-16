@@ -16,9 +16,9 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from clinvar_gkm_parquet import baseline, build, sqltemplate
-from clinvar_gkm_parquet.default_pairing import sections_of
-from clinvar_gkm_parquet.spec import resolve_spec
+from gkm_bundle_parquet import baseline, build, sqltemplate
+from gkm_bundle_parquet.default_pairing import sections_of
+from gkm_bundle_parquet.spec import resolve_spec
 
 FIXTURE = Path(__file__).parent / "fixtures" / "real-1.1.0" / "clinvar-gkm_excerpt.json.gz"
 SECTIONS = sections_of("1.1.0")

@@ -39,7 +39,7 @@ After writing, the output is re-read with the tool's own `bundle.stage_bundle` t
 and each staged record is compared with the source bytes.
 
 The pass-1 check of re-opened streams (Tap), the pointer regex and the line-layout regexes are shared with the
-selection engine (`clinvar_gkm_parquet.select`, ADR 0004), which does the same pointer walk for selective builds.
+selection engine (`gkm_bundle_parquet.select`, ADR 0004), which does the same pointer walk for selective builds.
 
 Usage (see tests/fixtures/real-1.1.0/README.md):
     scripts/extract-fixtures.py SOURCE --source-url URL --release YYYY-MM-DD [--sha256 HEX] [options]
@@ -66,18 +66,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
-from clinvar_gkm_parquet import __version__ as TOOL_VERSION
-from clinvar_gkm_parquet.bundle import stage_bundle
-from clinvar_gkm_parquet.compat import TABLE_SPEC_VERSION
-from clinvar_gkm_parquet.default_pairing import reader_rules, sections_of
-from clinvar_gkm_parquet.errors import ToolError
-from clinvar_gkm_parquet.model import InputFile
-from clinvar_gkm_parquet.select import SCHEMA_LINE as _SCHEMA_LINE
-from clinvar_gkm_parquet.select import SECTION_OPEN as _SECTION_OPEN
-from clinvar_gkm_parquet.select import SelectionError, Tap, iter_pointers
-from clinvar_gkm_parquet.select import key_end as _key_end
-from clinvar_gkm_parquet.sources import open_stream
-from clinvar_gkm_parquet.spec import load_spec
+from gkm_bundle_parquet import __version__ as TOOL_VERSION
+from gkm_bundle_parquet.bundle import stage_bundle
+from gkm_bundle_parquet.compat import TABLE_SPEC_VERSION
+from gkm_bundle_parquet.default_pairing import reader_rules, sections_of
+from gkm_bundle_parquet.errors import ToolError
+from gkm_bundle_parquet.model import InputFile
+from gkm_bundle_parquet.select import SCHEMA_LINE as _SCHEMA_LINE
+from gkm_bundle_parquet.select import SECTION_OPEN as _SECTION_OPEN
+from gkm_bundle_parquet.select import SelectionError, Tap, iter_pointers
+from gkm_bundle_parquet.select import key_end as _key_end
+from gkm_bundle_parquet.sources import open_stream
+from gkm_bundle_parquet.spec import load_spec
 
 SCRIPT_VERSION = "1.0"
 GENERATOR = "scripts/extract-fixtures.py"

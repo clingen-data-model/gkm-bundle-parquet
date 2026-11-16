@@ -19,16 +19,16 @@ import yaml
 from _fixture import FIXTURE, GOLDEN_SECTIONS_SPEC, SECTIONS, SOURCE_RELEASE
 from _input_helpers import local_input
 
-from clinvar_gkm_parquet import build as build_mod
-from clinvar_gkm_parquet.columnset import load_column_set, parse_column_set
-from clinvar_gkm_parquet.compiled import compiled_spec
-from clinvar_gkm_parquet.compiler import compile_sections, root_parts, spec_for_sorted_input, table_spec_sha256
-from clinvar_gkm_parquet.default_pairing import column_set_source, schema_source
-from clinvar_gkm_parquet.errors import CompileError
-from clinvar_gkm_parquet.model import BuildInputs
-from clinvar_gkm_parquet.roundtrip import rebuild
-from clinvar_gkm_parquet.schemas import SchemaFile, SchemaSet, load_schema_set
-from clinvar_gkm_parquet.spec import Spec, Table, check_compiled, parse_spec
+from gkm_bundle_parquet import build as build_mod
+from gkm_bundle_parquet.columnset import load_column_set, parse_column_set
+from gkm_bundle_parquet.compiled import compiled_spec
+from gkm_bundle_parquet.compiler import compile_sections, root_parts, spec_for_sorted_input, table_spec_sha256
+from gkm_bundle_parquet.default_pairing import column_set_source, schema_source
+from gkm_bundle_parquet.errors import CompileError
+from gkm_bundle_parquet.model import BuildInputs
+from gkm_bundle_parquet.roundtrip import rebuild
+from gkm_bundle_parquet.schemas import SchemaFile, SchemaSet, load_schema_set
+from gkm_bundle_parquet.spec import Spec, Table, check_compiled, parse_spec
 
 SCHEMAS = load_schema_set(schema_source("1.1.0"))
 COLUMN_SET = load_column_set(column_set_source("1.1.0"))

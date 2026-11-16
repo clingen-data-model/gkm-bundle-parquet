@@ -18,8 +18,8 @@ import duckdb
 import pytest
 from _fixture import FIXTURE, FIXTURES
 
-from clinvar_gkm_parquet.build import KV_PREFIX
-from clinvar_gkm_parquet.cli import main
+from gkm_bundle_parquet.build import KV_PREFIX
+from gkm_bundle_parquet.cli import main
 
 ROOT = Path(__file__).resolve().parents[1]
 CLINVAR_PAIRING = (

@@ -11,7 +11,7 @@
 
 ```text
 Table spec 1.0: the 22 tables of ClinVar-GKM's 1.1.0 latest Parquet set (design plan §3).
-Format: see src/clinvar_gkm_parquet/spec.py. Rules: .claude/rules/table-spec.md. Rendered: README.md (generated
+Format: see src/gkm_bundle_parquet/spec.py. Rules: .claude/rules/table-spec.md. Rendered: README.md (generated
 by scripts/render-spec-readme.py; don't edit it by hand).
 
 status: draft. Names, order and types are taken from ClinVar-GKM's BigQuery export SQL, its 1.1.0 column
