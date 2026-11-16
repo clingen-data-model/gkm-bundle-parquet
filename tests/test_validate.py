@@ -175,6 +175,45 @@ def test_cli_validates_an_empty_section_against_the_schema(tmp_path):
     assert (f["section"], f["key"]) == ("therapy", None)
 
 
+# --- a bundle with no version (ADR 0009) -------------------------------------------------------------------------
+
+CIVIC = FIXTURES / "civic"
+CIVIC_SCHEMA = CIVIC / "schema-set"
+
+
+@pytest.mark.parametrize("bundle", sorted(CIVIC.glob("civic-assertion-*-bundle.json")), ids=lambda p: p.stem)
+def test_cli_validates_a_bundle_whose_schema_declares_no_version(tmp_path, capsys, bundle):
+    """CIViC's schema has no version property, so with no --version-property the bundle is validated with none (it
+    used to stop: no schema_version). Each record is checked alone, and CIViC's root `required` lists every
+    collection, so every record fails on exactly that, and on nothing else."""
+    doc = json.loads(bundle.read_text())
+    out, failures = tmp_path / "counts.json", tmp_path / "f.jsonl"
+    argv = ["validate", str(bundle), "--bundle-schema", str(CIVIC_SCHEMA), "--workers", "1"]
+    assert main([*argv, "--json", str(out), "--failures", str(failures)]) == 1
+    assert "version: (none)" in capsys.readouterr().out
+    result = json.loads(out.read_text())
+    assert result["version"] == ""
+    values = {"metadata", "failedAssertionIds"}  # root values: each checked once, as a section is
+    assert {s: v["records"] for s, v in result["sections"].items()} == {
+        k: 1 if k in values else len(v) or 1 for k, v in doc.items()
+    }
+    required = set(json.loads((CIVIC_SCHEMA / "civic-gkm-bundle-v0.1.0-a0.schema.json").read_text())["required"])
+    for line in failures.read_text().splitlines():
+        f = json.loads(line)
+        assert {(e["path"], e["message"]) for e in f["errors"]} == {
+            ("", f'"{name}" is a required property') for name in required - {f["section"]}
+        }
+
+
+def test_cli_without_the_schema_or_with_a_version_property_it_lacks_still_stops(tmp_path, capsys):
+    bundle = str(next(CIVIC.glob("civic-assertion-*-bundle.json")))
+    assert main(["validate", bundle, "--workers", "1"]) == 2
+    assert "schema_version" in capsys.readouterr().err
+    argv = ["validate", bundle, "--bundle-schema", str(CIVIC_SCHEMA), "--version-property", "schema_version"]
+    assert main([*argv, "--workers", "1"]) == 2
+    assert "schema_version" in capsys.readouterr().err
+
+
 # --- negative cases ----------------------------------------------------------------------------------------------
 
 
