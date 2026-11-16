@@ -137,6 +137,42 @@ def describe_file(con: duckdb.DuckDBPyConnection, path: Path) -> list[tuple[str,
     return [(r[0], r[1]) for r in rows]
 
 
+# The default DuckDB memory limit when --memory-limit isn't given: this fraction of the machine's memory, or of
+# the process's cgroup limit when that is lower (a container). DuckDB's own default, 80% of physical memory, leaves
+# too little beside it: the limit holds only DuckDB's buffers. On a 32 GB machine, tool 1.0.1's full-release builds
+# peaked at about 29 GB and the 2026-11-06 oracle run ran out of memory (ADR 0008).
+DEFAULT_MEMORY_FRACTION = 0.5
+# cgroup v2, then v1. A missing, unreadable or unlimited ("max") file sets no limit.
+CGROUP_MEMORY_FILES = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+
+
+def available_memory() -> int | None:
+    """Bytes of memory the process may use: physical memory, or the cgroup limit when lower. None if unknown."""
+    sizes = []
+    try:
+        sizes.append(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+    except (AttributeError, ValueError, OSError):
+        pass
+    for path in CGROUP_MEMORY_FILES:
+        try:
+            sizes.append(int(path.read_text(encoding="ascii").strip()))
+        except (OSError, ValueError):
+            continue
+    sizes = [s for s in sizes if s > 0]
+    return min(sizes) if sizes else None
+
+
+def default_memory_limit() -> str | None:
+    """The memory limit a run sets when none is given (DEFAULT_MEMORY_FRACTION); None leaves DuckDB's own."""
+    total = available_memory()
+    if total is None:
+        return None
+    return f"{max(1, int(total * DEFAULT_MEMORY_FRACTION) // 2**20)}MiB"
+
+
 def configure(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -144,8 +180,9 @@ def configure(
     threads: int | None = None,
     temp_directory: Path | None = None,
 ) -> None:
-    """Connection settings for a build or a verify run."""
+    """Connection settings for a build or a verify run. With no memory_limit, default_memory_limit()."""
     con.execute("SET preserve_insertion_order = true")
+    memory_limit = memory_limit or default_memory_limit()
     if memory_limit:
         con.execute(f"SET memory_limit = {sql_str(memory_limit)}")
     if threads:

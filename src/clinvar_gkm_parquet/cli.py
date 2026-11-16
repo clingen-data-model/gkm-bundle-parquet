@@ -52,7 +52,11 @@ def _selection(p: argparse.ArgumentParser, *, required: bool) -> None:
 
 def _engine(p: argparse.ArgumentParser) -> None:
     p.add_argument("--work-dir", type=Path, help="staging and DuckDB spill directory")
-    p.add_argument("--memory-limit", help="DuckDB memory limit, e.g. 12GB")
+    p.add_argument(
+        "--memory-limit",
+        help="DuckDB memory limit, e.g. 12GB (default: half the machine's memory, or of its cgroup limit if "
+        "lower)",
+    )
     p.add_argument("--threads", type=int, help="DuckDB threads")
 
 
