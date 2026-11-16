@@ -13,6 +13,11 @@ selection accepts a pairing, while deltas still don't; a custom column set may d
 **Amended by [ADR 0009](./0009-generic-gkm-bundle-tool-renamed.md) (accepted 2026-11-16):** the default bundle
 (`spec/sections/default-bundle.yaml`, the shipped schema snapshot and column set) goes; a schema is always given.
 
+**Amended by [ADR 0007](./0007-default-generated-from-bundle-schema.md) (accepted 2026-11-16):** the default is
+generated from the bundle schema, so a column set is required only for a projection (decision 2). The positions decision 3
+stops on (string-or-object, a nested integer-or-Range, maps, keywords the rules can't read, a class that reaches itself)
+get rules instead, and a schema `pattern` declares a pointer as `->a|b` does.
+
 ## Context
 
 The default `sections` spec (ADR 0003) was a checked-in file, `spec/sections/1.0/tables.yaml`, written by hand from

@@ -57,7 +57,8 @@ A new ADR 0007 on a branch from `main`, written on top of ADRs 0008 and 0009:
 - takes ADR 0008's round trip (1.2, 1.3), no `ordinal` (1.1) and optional narrowing (1.4);
 - names no producer: ClinVar-GKM and CIViC are examples.
 
-It is accepted before the generator is built (Phase 3, step 2).
+**Done:** [ADR 0007](../decisions/0007-default-generated-from-bundle-schema.md) accepted 2026-11-16 (#22), before the generator is
+built (Phase 3, step 2).
 
 ## 5. Phase 2 — 1.1.0, the last 1.x
 
