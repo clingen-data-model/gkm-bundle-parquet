@@ -11,6 +11,12 @@ that the verdicts are the same is below.
   `{"schema_version": <the bundle's own>, <section>: {<key>: <record>}}`, the shape ClinVar-GKM's
   `src/scripts/validate-bundle.py` passes to the toolkit, so each section's key pattern is checked too. An empty section is
   validated as `{"schema_version": ..., <section>: {}}`. A verdict is per record.
+- **The version property** is `--version-property`, or else `schema_version`. From 1.1.0, a schema given with
+  `--bundle-schema` whose root declares no `schema_version` (CIViC's, `tests/fixtures/civic/`) has none, unless
+  `--version-property` names one: each record is then validated as `{<section>: {<key>: <record>}}` (ADR 0009). Because a
+  record is checked alone, a schema whose root `required`s its collections fails every record on that list: on the two
+  CIViC fixtures, every record fails, each only on the root `required` of the other 18 root properties (2026-11-16,
+  `tests/test_validate.py`).
 - **The bundle is streamed** with the tool's own reader (`bundle.py`), and its sha256 is checked against the line index or a
   `.sha256` sidecar when there is one. Records are parsed and validated in worker processes (`--workers`, default: the CPU
   count).

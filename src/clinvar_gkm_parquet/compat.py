@@ -25,6 +25,8 @@ KV_PREFIX = (
     "clinvar_gkm_parquet."  # of every key-value entry a build writes; a rename here changes the files' bytes
 )
 PUBLISHED_SPEC = "clinvar-gkm"  # the spec of ClinVar-GKM's published set; its release and the oracle name it
+# Deprecated in 1.1.0 and removed in 2.0.0 (ADR 0008 decision 2), as is reading the default bundle (ADR 0009).
+DEPRECATED_SPECS = ("baseline", "clinvar-gkm")
 # The version of the clinvar-gkm spec. Kept under this name for build.py, verify.py and version --json, which
 # read it as "the" table-spec version from before specs had names.
 TABLE_SPEC_VERSION = BUILTIN_SPECS[PUBLISHED_SPEC]
@@ -34,7 +36,8 @@ SCHEMA_VERSION_RULE = (
     "sections compiles any bundle from its schema and column set (ADR 0006). With neither given, it reads the "
     "default bundle's: the versions in snapshotted_schema_versions work offline, and any other whose schema and "
     "column set are published is fetched once and cached. Every other spec reads the bundle_schema_versions it "
-    "lists."
+    "lists. Deprecated, and removed in 2.0.0: reading a bundle without its schema (the default bundle), the "
+    "baseline and clinvar-gkm specs and a tables.yaml spec."
 )
 
 
@@ -77,6 +80,7 @@ def version_info() -> dict:
             "version": version,
             "default": name == DEFAULT_SPEC,
             "compiled": name == COMPILED_SPEC,
+            "deprecated": name in DEPRECATED_SPECS,
         }
         if name == COMPILED_SPEC:
             by_version = {v: compiled_spec(v)[0] for v in snapshotted}

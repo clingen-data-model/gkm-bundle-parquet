@@ -382,18 +382,33 @@ def _schema_resolver(bundle_schema: str | None):
     cache: dict[str, tuple[SchemaSet, str]] = {}
 
     def schema_for(version: str) -> tuple[SchemaSet, str]:
-        if version not in cache:
-            if bundle_schema is not None:
-                source = bundle_schema
-            else:
-                from .default_pairing import schema_source
+        if bundle_schema is not None:
+            source = bundle_schema
+        else:
+            from .default_pairing import schema_source
 
-                source = schema_source(version)
+            source = schema_source(version)
+        if source not in cache:
             # A file or URL is fetched and cached here, so each worker reads it from the cache.
-            cache[version] = load_schema_set(source), source
-        return cache[version]
+            cache[source] = load_schema_set(source), source
+        return cache[source]
 
     return schema_for
+
+
+def version_property_for(given: str | None, bundle_schema: str | None, schema_for) -> str | None:
+    """The root property holding the version: `--version-property` when given. Without it, the default bundle's
+    (schema_version), except that a given schema whose root doesn't declare that property has none: such a bundle
+    is validated with no version (ADR 0009)."""
+    from .default_pairing import version_property
+
+    if given:
+        return given
+    default = version_property()
+    if bundle_schema is None:
+        return default
+    schema_set, _ = schema_for("")
+    return default if default in schema_set.bundle.get("properties", {}) else None
 
 
 def _format(f: dict) -> str:
@@ -405,10 +420,11 @@ def _format(f: dict) -> str:
 
 def run_validate_command(args) -> int:
     from . import sources
-    from .default_pairing import version_property
 
     index = sources.load_index(args.index) if args.index else None
     inp = sources.resolve_input(args.bundle, sha256=args.sha256, index=index)
+    schema_for = _schema_resolver(args.bundle_schema)
+    prop = version_property_for(args.version_property, args.bundle_schema, schema_for)
     failures_out = open(args.failures, "w", encoding="utf-8") if args.failures else None
     printed = 0
 
@@ -423,8 +439,8 @@ def run_validate_command(args) -> int:
     try:
         result = validate_bundle(
             inp,
-            _schema_resolver(args.bundle_schema),
-            args.version_property or version_property(),
+            schema_for,
+            prop,
             engine=args.engine,
             workers=args.workers,
             on_failure=on_failure,
@@ -433,7 +449,7 @@ def run_validate_command(args) -> int:
         if failures_out is not None:
             failures_out.close()
     print(f"bundle: {inp.name} (sha256 {result.bundle_sha256}, {inp.sha256_source or 'not checked'})")
-    print(f"version: {result.version}; schema set sha256 {result.schema_set_sha256}")
+    print(f"version: {result.version or '(none)'}; schema set sha256 {result.schema_set_sha256}")
     print(f"engine: {result.engine}; {result.workers} workers")
     print(f"  {'section':34s} {'records':>11s} {'failing':>8s} {'cpu ms/rec':>10s} {'compile s':>10s}")
     for name, s in result.sections.items():

@@ -1290,7 +1290,7 @@ def resolve_spec_for(
 def run_build_command(args) -> int:
     """`clinvar-gkm-parquet build`: resolve the spec, the selection options and the inputs from the CLI
     arguments, build, print a summary. No --spec means the default spec (sections)."""
-    from .driver import driver_from_args
+    from .driver import driver_from_args, with_pairing_rules
 
     spec_arg = getattr(args, "spec", None)
     if not is_compiled(spec_arg):
@@ -1298,9 +1298,10 @@ def run_build_command(args) -> int:
     driver = driver_from_args(args)
     inputs = resolve_build_inputs(args)
     pairing = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
-    if pairing[0] is not None and (driver is not None or inputs.deltas):
-        raise InputError("--bundle-schema and --column-set build a whole bundle: not with --driver or --delta")
+    if pairing[0] is not None and inputs.deltas:
+        raise InputError("--bundle-schema and --column-set read one bundle: not with --delta")
     spec, source = resolve_spec_for(spec_arg, inputs, *pairing)
+    driver = with_pairing_rules(driver, spec, pairing)
     tables = [t.strip() for t in args.tables.split(",") if t.strip()] if args.tables else None
     result = build(
         inputs,

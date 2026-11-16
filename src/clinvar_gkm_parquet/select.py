@@ -39,18 +39,26 @@ disk holds the output plus a compressed spool of the selected records, which shr
   a pass completes one level and part of the next. Pointers mostly point to EARLIER sections (vcv -> proposition
   -> variation -> allele -> location -> sequenceReference), so a hop back costs about one pass.
 - Pass 1 reads the whole source: it checks the sha256 (BundleFileSource, when an expected one is known), the
-  sections against the schema set of the bundle's schema_version, the line grammar, and the seeds. A later pass
-  stops at the first section after which nothing is wanted, and skips sections with nothing wanted without parsing
-  their keys. A re-opened bundle is checked against pass 1 (Tap), and every later pass's per-section record
-  counts must equal pass 1's.
+  sections against the bundle's shape (its RootRules: the default bundle's, or a pairing's), the line grammar, and
+  the seeds. A later pass stops at the first section after which nothing is wanted, and skips sections with nothing
+  wanted without parsing their keys. A re-opened bundle is checked against pass 1 (Tap), and every later pass's
+  per-section record counts must equal pass 1's.
 - A pointer to a key its section doesn't hold is dangling: recorded in the result, never a failure.
 - At the end, the spool is merged per section by source position into the mini-bundle (gzip, mtime 0, no file
   name, so the same inputs give the same bytes), which is re-read with bundle.stage_bundle to prove it valid.
+
+The root (ADR 0008 decision 4.1, ADR 0009): a BundleFileSource reads it by its RootRules, the default bundle's
+unless given a pairing's (compiled.reader_rules). The version property is the rules' (none, or optional, for a
+pairing), and the mini-bundle writes it only when the source has one. An empty collection (`"<section>": {}`) is
+read and selects nothing; a root value that isn't a collection, where the shape allows one, is copied to the
+mini-bundle verbatim, after its sections. A file in another JSON layout is read whole into the canonical line
+layout (bundle.py), when the rules allow the general reader; its sha256 is the file's.
 """
 
 from __future__ import annotations
 
 import enum
+import functools
 import gzip
 import hashlib
 import heapq
@@ -70,9 +78,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
-from .bundle import LINE_LAYOUT, layout_of, peek_version, stage_bundle
+from .bundle import (
+    LINE_LAYOUT,
+    RootRules,
+    _canonical_text,
+    _load_json,
+    layout_of,
+    peek_version,
+    stage_bundle,
+)
 from .compat import KV_PREFIX
-from .default_pairing import reader_rules, shape_of, version_property
+from .default_pairing import reader_rules
 from .errors import BundleFormatError, InputError, SchemaVersionError, ToolError
 from .model import InputFile
 from .sources import open_stream
@@ -90,8 +106,19 @@ _WRITE_CHUNK = 1 << 20
 _INF = float("inf")
 
 # The assembler's line layout (design plan §4.2; bundle.py holds the strict reader the output is checked with).
-SCHEMA_LINE = re.compile(rb'  "schema_version": "([^"\\]*)"(,?)\n')
 SECTION_OPEN = re.compile(rb'  "([^"\\]*)": \{\n')
+_ROOT_MEMBER = re.compile(rb'  ("(?:[^"\\]|\\.)*"): (.+?)(,?)\n')  # an empty collection or a root value
+
+
+@functools.cache
+def _version_line(prop: str) -> re.Pattern[bytes]:
+    """Line 2 when it holds the version: `  "<prop>": "<version>",` (no comma when nothing follows)."""
+    return re.compile(rb'  "' + re.escape(prop.encode("utf-8")) + rb'": "([^"\\]*)"(,?)\n')
+
+
+SCHEMA_LINE = _version_line("schema_version")  # the default bundle's line 2 (scripts/extract-fixtures.py)
+
+
 # A string VALUE that starts with "#/": its opening quote follows ':' (object member), '[' or ',' (array
 # element); iter_pointers checks that byte. (A lookbehind in the regex would stop `re` from searching for the
 # literal prefix, about 15 times slower.) An escaped quote inside a string is preceded by a backslash, so free
@@ -369,7 +396,8 @@ class BundleFileSource:
     """A bundle file (local path or https:// URL) as a RecordSource. Pass 1 opens `inp`; later passes call
     `reopen(pass_number)` for a fresh stream of the same bytes (default: open `inp` again), and are checked
     against pass 1 with a Tap. After pass 1, `sha256` and `size` are those of the bytes read; a mismatch with
-    `inp.expected_sha256` raises InputError."""
+    `inp.expected_sha256` raises InputError. `rules` say how to read the root (default: the default bundle's). A
+    file in another layout is read whole, as the canonical line layout, if the rules allow the general reader."""
 
     def __init__(
         self,
@@ -377,27 +405,54 @@ class BundleFileSource:
         *,
         reopen: Callable[[int], BinaryIO] | None = None,
         checkpoint_bytes: int = CHECKPOINT_BYTES,
+        rules: RootRules | None = None,
     ):
         self.input = inp
         self.name = inp.name
         self.sha256: str | None = None
         self.size: int | None = None
+        self.rules = rules if rules is not None else reader_rules()
         self._reopen = reopen
         self._every = checkpoint_bytes
         self._reference: Tap | None = None
         self._schema_version: str | None = None
+        self._text: bytes | None = None  # a file in another layout, as the canonical line layout
 
     @property
     def schema_version(self) -> str:
-        """From the file's first lines, before any pass; pass 1 must read the same."""
+        """From the file's first lines, before any pass ("" for none); pass 1 must read the same."""
         if self._schema_version is None:
+            prop = self.rules.version_property
             if layout_of(self.input) != LINE_LAYOUT:
-                raise SelectionError(f"{self.name}: a selection reads the line layout; this file isn't in it")
-            version = peek_version(self.input, version_property())
+                if not self.rules.general_reader:
+                    raise SelectionError(f"{self.name}: a selection reads the line layout; this file isn't in it")
+                version = self._read_whole()
+            else:
+                version = peek_version(self.input, prop) if prop else None
             if version is None:
-                raise SchemaVersionError(f"{self.name}: no {version_property()!r} on line 2")
+                if self.rules.version_required:
+                    raise SchemaVersionError(f"{self.name}: no {prop!r} on line 2")
+                version = ""
             self._schema_version = version
         return self._schema_version
+
+    def _read_whole(self) -> str | None:
+        """Read a file in another layout whole (it must fit in memory), check its sha256, and keep its canonical
+        line layout for the passes. Returns its version, or None."""
+        with open_stream(self.input) as raw:
+            data = raw.read()
+        sha, size = hashlib.sha256(data).hexdigest(), len(data)
+        _check_sha(self.input, sha)
+        if self.input.name.endswith(".gz") or data[:2] == b"\x1f\x8b":
+            try:
+                data = gzip.decompress(data)
+            except (EOFError, gzip.BadGzipFile, zlib.error) as e:
+                raise BundleFormatError(f"{self.name}: not a complete gzip stream: {e}") from e
+        doc = _load_json(self.name, data)
+        self._text = _canonical_text(self.name, doc, self.rules)
+        self.sha256, self.size = sha, size
+        prop = self.rules.version_property
+        return doc.get(prop) if prop else None
 
     def open_pass(self, number: int) -> AbstractContextManager[RecordPass]:
         return _FilePass(self, number)
@@ -410,7 +465,9 @@ class _FilePass:
         self.lineno = 0
         self.complete = False
         self.schema_version = ""
+        self.root_values: dict[str, tuple[bytes, bytes]] = {}  # name -> (name, value) JSON text, in file order
         self._more = False
+        self._pending: bytes | None = None  # line 2, when it isn't the version
 
     @property
     def bytes_read(self) -> int:
@@ -418,14 +475,17 @@ class _FilePass:
 
     def __enter__(self) -> _FilePass:
         src = self._src
-        if self.number == 1 or src._reopen is None:
+        if src._text is not None:
+            raw = io.BytesIO(src._text)
+        elif self.number == 1 or src._reopen is None:
             raw = open_stream(src.input)
         else:
             raw = src._reopen(self.number)
         self._raw = raw
         try:
             self._tap = Tap(raw, src._every, src._reference if self.number > 1 else None)
-            self._f = io.BufferedReader(gzip.GzipFile(fileobj=self._tap, mode="rb"), buffer_size=_READ_BUFFER)
+            text = self._tap if src._text is not None else gzip.GzipFile(fileobj=self._tap, mode="rb")
+            self._f = io.BufferedReader(text, buffer_size=_READ_BUFFER)
             with self._errors():
                 self._header()
         except BaseException:
@@ -463,7 +523,7 @@ class _FilePass:
     def _checksum_first(self, e: Exception) -> None:
         """A wrong or corrupt file can fail the grammar or gzip first; a known checksum mismatch is the error."""
         inp = self._src.input
-        if self.number != 1 or inp.expected_sha256 is None:
+        if self.number != 1 or inp.expected_sha256 is None or self._src._text is not None:
             return
         try:
             self._tap.drain()
@@ -479,27 +539,43 @@ class _FilePass:
             raise self.fail(f"expected '{{', got {_short(line)}")
         line = f.readline()
         self.lineno = 2
-        m = SCHEMA_LINE.fullmatch(line)
-        if not m:
+        rules = self._src.rules
+        prop = rules.version_property
+        m = _version_line(prop).fullmatch(line) if prop else None
+        if m:
+            self.schema_version = m.group(1).decode("utf-8", "replace")
+            self._more = bool(m.group(2))
+        elif rules.version_required:
             raise SchemaVersionError(
-                f'{self._src.name}: line 2 must be \'  "schema_version": "<version>",\', got {_short(line)}'
+                f'{self._src.name}: line 2 must be \'  "{prop}": "<version>",\', got {_short(line)}'
             )
-        self.schema_version = m.group(1).decode("utf-8", "replace")
-        self._sections = shape_of(self.schema_version).collections
-        self._more = bool(m.group(2))
+        else:  # no version: line 2 is the first root member, or the closing brace
+            self.lineno = 1
+            self._pending = line
+            self._more = line not in (b"}\n", b"}")
+        shape = rules.shape_of(self.schema_version)
+        self._sections = shape.collections
+        self._other_values = shape.other_values
 
     def sections(self) -> Iterator[_FileSection]:
         f = self._f
         seen: set[str] = set()
         with self._errors():
             while self._more:
-                line = f.readline()
+                line, self._pending = (self._pending, None) if self._pending is not None else (f.readline(), None)
                 self.lineno += 1
                 m = SECTION_OPEN.fullmatch(line)
                 if not m:
                     if line in (b"}\n", b"}"):
                         raise self.fail("trailing ',' after the last section")
-                    raise self.fail(f"expected a section to open, got {_short(line)}")
+                    member = _ROOT_MEMBER.fullmatch(line)
+                    if not member:
+                        raise self.fail(f"expected a section to open, got {_short(line)}")
+                    self._more = bool(member.group(3))
+                    sec = self._root_member(member, seen)
+                    if sec is not None:
+                        yield sec
+                    continue
                 name = m.group(1).decode("utf-8", "replace")
                 if name not in self._sections:
                     have = ", ".join(self._sections)
@@ -510,7 +586,7 @@ class _FilePass:
                 sec = _FileSection(self, name)
                 yield sec
                 sec.skip()
-            line = f.readline()
+            line, self._pending = (self._pending, None) if self._pending is not None else (f.readline(), None)
             self.lineno += 1
             if line != b"}\n":
                 raise self.fail(f"expected the closing '}}' of the bundle, got {_short(line)}")
@@ -520,10 +596,36 @@ class _FilePass:
         self.complete = True
         src = self._src
         if self.number == 1:
-            src.sha256 = self._tap.sha.hexdigest()
-            src.size = self._tap.pos
             src._reference = self._tap
-            _check_sha(src.input, src.sha256)
+            if src._text is None:  # a file read whole was checked as it was read
+                src.sha256 = self._tap.sha.hexdigest()
+                src.size = self._tap.pos
+                _check_sha(src.input, src.sha256)
+
+    def _root_member(self, m: re.Match[bytes], seen: set[str]) -> _FileSection | None:
+        """A root member on one line (as bundle.py reads it): an empty collection, returned as a section with no
+        records, or a root value, kept verbatim."""
+        try:
+            name = json.loads(m.group(1))
+            json.loads(m.group(2))
+        except ValueError as e:
+            raise self.fail(f"a root member is not JSON on one line: {e}") from e
+        if name == self._src.rules.version_property:
+            raise self.fail(f"the version property {name!r} must be on line 2")
+        if name in seen or name in self.root_values:
+            raise self.fail(f"root member {name!r} appears twice")
+        if name in self._sections:
+            if m.group(2) != b"{}":
+                raise self.fail(f"collection {name!r} must open on its own line, or be {{}}")
+            seen.add(name)
+            sec = _FileSection(self, name)
+            sec._done = True
+            return sec
+        if not self._other_values:
+            have = ", ".join(self._sections)
+            raise self.fail(f"unknown section {name!r} (a {self.schema_version or 'this'} bundle has: {have})")
+        self.root_values[name] = (m.group(1), m.group(2))
+        return None
 
 
 class _FileSection:
@@ -752,7 +854,8 @@ def select(
         raise SelectionError(f"max_depth must be a non-negative integer or None, not {max_depth!r}")
     if isinstance(source, InputFile):
         source = BundleFileSource(source)
-    names = shape_of(source.schema_version).collections
+    rules = getattr(source, "rules", None) or reader_rules()
+    names = rules.shape_of(source.schema_version).collections
     index = section_index(names)
     allowed_list = _allowed(sections, names, index)
     seed_bodies = _seeds(seeds, allowed_list, names, index)
@@ -765,9 +868,9 @@ def select(
     try:
         engine = _Engine(source, seed_bodies, follow, max_depth, allowed_list, _Spool(work, names), names)
         engine.run()
-        size, sha, digests = engine.write(partial, compresslevel)
+        size, sha, digests = engine.write(partial, compresslevel, rules.version_property)
         if validate:
-            _validate(partial, out_path.name, sha, size, engine.schema_version, digests, work / "validate")
+            _validate(partial, out_path.name, sha, size, engine, digests, work / "validate", rules)
         os.replace(partial, out_path)
     except BaseException:
         partial.unlink(missing_ok=True)
@@ -893,6 +996,7 @@ class _Engine:
         self.order: list[int] = []
         self.counts: dict[int, int] = {}
         self.schema_version = ""
+        self.root_values: dict[str, tuple[bytes, bytes]] = {}  # pass 1's (file sources only)
         self.passes: list[PassStats] = []
         self.dangling: dict[tuple[int, bytes], tuple[int, bytes]] = {}
         self.selected = 0
@@ -1029,6 +1133,8 @@ class _Engine:
                         )
                 if stopped is None and not first and pos != len(self.order):
                     raise SourceChangedError(f"{self.source.name}: pass {number} ends before pass 1 did")
+                if first:
+                    self.root_values = dict(getattr(p, "root_values", {}))
                 bytes_read = p.bytes_read
         finally:
             self.spool.end_pass()
@@ -1133,19 +1239,27 @@ class _Engine:
 
     # -- output -----------------------------------------------------------------------------------------------
 
-    def write(self, path: Path, compresslevel: int) -> tuple[int, str, dict[str, tuple[int, str]]]:
-        """Merge the spool into the mini-bundle. Returns (size, sha256, {section: (records, sha256 of the
-        staging lines `key\\trecord\\n`)}) for the validation."""
+    def write(
+        self, path: Path, compresslevel: int, version_property: str | None
+    ) -> tuple[int, str, dict[str, tuple[int, str]]]:
+        """Merge the spool into the mini-bundle: the version (if the source has one), the selected sections, then
+        the source's root values. Returns (size, sha256, {section: (records, sha256 of the staging lines
+        `key\\trecord\\n`)}) for the validation."""
         digests: dict[str, tuple[int, str]] = {}
         with open(path, "wb") as fh:
             hw = _HashingWriter(fh)
             with gzip.GzipFile(filename="", mode="wb", fileobj=hw, compresslevel=compresslevel, mtime=0) as gz:
-                buf = bytearray(b'{\n  "schema_version": "' + self.schema_version.encode() + b'"')
+                buf = bytearray(b"{\n")
+                sep = b""
+                if version_property and self.schema_version:
+                    buf += b'  "' + version_property.encode() + b'": "' + self.schema_version.encode() + b'"'
+                    sep = b",\n"
                 for si in self.order:
                     if not self.depth[si]:
                         continue
                     name = self.names[si]
-                    buf += b',\n  "' + name.encode() + b'": {\n'
+                    buf += sep + b'  "' + name.encode() + b'": {\n'
+                    sep = b",\n"
                     h = hashlib.sha256()
                     n = 0
                     for _, key, record in self.spool.merged(si):
@@ -1164,23 +1278,37 @@ class _Engine:
                             f"internal: section {name}: spooled {n} records, selected {len(self.depth[si])}"
                         )
                     digests[name] = (n, h.hexdigest())
+                for member, value in self.root_values.values():
+                    buf += sep + b"  " + member + b": " + value
+                    sep = b",\n"
                 buf += b"\n}\n"
                 gz.write(buf)
         return hw.size, hw.sha.hexdigest(), digests
 
 
 def _validate(
-    path: Path, name: str, sha: str, size: int, version: str, digests: dict[str, tuple[int, str]], work: Path
+    path: Path,
+    name: str,
+    sha: str,
+    size: int,
+    engine: _Engine,
+    digests: dict[str, tuple[int, str]],
+    work: Path,
+    rules: RootRules,
 ) -> None:
-    """Re-read the mini-bundle with stage_bundle: each staged section must hold exactly what was written."""
+    """Re-read the mini-bundle with stage_bundle: each staged section must hold exactly what was written, and the
+    root values what the source held."""
     inp = InputFile(str(path), name, None, sha, "explicit", size)
+    root_values: dict[str, bytes] = {}
     try:
-        staged = stage_bundle(inp, work, reader_rules())
+        staged = stage_bundle(inp, work, rules, root_values=root_values)
     except ToolError as e:
         raise SelectionError(f"the written mini-bundle does not pass bundle.stage_bundle: {e}") from e
     try:
-        if staged.schema_version != version or set(staged.sections) != set(digests):
+        if staged.schema_version != engine.schema_version or set(staged.sections) != set(digests):
             raise SelectionError("bundle.stage_bundle staged different sections than were written")
+        if root_values != {k: v for k, (_, v) in engine.root_values.items()}:
+            raise SelectionError("bundle.stage_bundle read different root values than were written")
         for sec, (n, digest) in digests.items():
             st = staged.sections[sec]
             h = hashlib.sha256()
