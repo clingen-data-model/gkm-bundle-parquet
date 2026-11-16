@@ -1,11 +1,12 @@
 # real-1.1.0 (real bundle excerpt)
 
 The suite's bundle fixture: a small, connected excerpt of the 2026-10-18 ClinVar-GKM 1.1.0 weekly full, made by
-`scripts/extract-fixtures.py` (design plan §8.1). Its source, counts and seeds are in `PROVENANCE.json`. It
+`scripts/extract-fixtures.py` (design plan §8.1; a ClinVar-GKM-specific script, removed in 2.0.0: run it from the
+1.1.0 source, `clinvar-gkm-parquet` 1.1.0). Its source, counts and seeds are in `PROVENANCE.json`. It
 replaced the provisional `tests/fixtures/examples-1.1.0/` fixture (de-inlined from ClinVar-GKM's `examples/`,
 not published bundle bytes), which was removed on 2026-10-31.
 
-## What the extractor writes here
+## What the extractor writes here (with tool 1.1.0's source)
 
 - `clinvar-gkm_excerpt.json.gz`: the mini-bundle, in the exact line layout of design plan §4.2. Every key and
   record is copied verbatim from the source line (no re-serialization), in the source's section order and the

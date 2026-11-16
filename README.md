@@ -1,80 +1,67 @@
-# clinvar-gkm-parquet
+# gkm-bundle-parquet
 
-Builds queryable **Parquet** tables from **GKM JSON bundles**, rebuilds the bundle from them, and validates bundles
+Builds queryable **Parquet** tables from a **GKM JSON bundle**, rebuilds the bundle from them, and validates bundles
 against their JSON Schema. It works with any bundle built on the GA4GH GKM classes (VRS, Cat-VRS, VA-Spec), given that
-bundle's JSON Schema. Its first producer is [ClinVar-GKM](https://github.com/clingen-data-model/clinvar-gkm). The tests also
-run on real [CIViC](https://github.com/ga4gh/gkm-starter-kit) bundles, which differ from ClinVar-GKM's in layout, version
-and root values.
+bundle's JSON Schema and a column set that pairs with it. It names no producer and has no default bundle. The tests run on
+real bundles of two producers: [ClinVar-GKM](https://github.com/clingen-data-model/clinvar-gkm) and
+[CIViC](https://github.com/ga4gh/gkm-starter-kit), which differ in layout, version and root values.
 
 The JSON bundles are the public record. Parquet is a derived convenience: a quick way to explore and query the bundle
 content with current database tools such as DuckDB, Polars, pandas and Spark. Every Parquet value can be recomputed from
 the bundle it came from ([ADR 0001](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0001-parquet-derived-from-bundles.md)).
 
-> **Status:** 1.1.0 is the latest release, and the last under the name `clinvar-gkm-parquet`. Two accepted decisions
-> reshape the tool for 2.0.0 (planned):
->
-> - [ADR 0008](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md)
->   (accepted): the default Parquet set is generated from the bundle schema alone and rebuilds the bundle record for
->   record. Custom column sets are labelled projections, and filters work in both directions. The `clinvar-gkm` and
->   `baseline` specs and hand-written `tables.yaml` input are retired.
-> - [ADR 0009](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0009-generic-gkm-bundle-tool-renamed.md)
->   (accepted): the tool names no producer and is renamed **`gkm-bundle-parquet`**. Every command takes the bundle's
->   schema (`--bundle-schema`), and none defaults to ClinVar-GKM. ClinVar-GKM's release model (its line index, monthly,
->   weekly and delta files, and replay) moves to ClinVar-GKM. The repository already has the new name (2026-11-16); the
->   package and command keep the old one until 2.0.0.
->
-> 1.1.0 deprecates what 2.0.0 removes ([Deprecations](#deprecations)). Everything still works as documented, including the
-> ClinVar-GKM defaults, and each deprecated use prints one line on stderr naming its replacement. ClinVar-GKM plans to
-> publish the default set this tool builds as its Parquet dataset; today it publishes its own BigQuery export.
+> **Status:** 2.0.0 (planned) is the first release under the name `gkm-bundle-parquet`. It removes what 1.1.0, the last
+> `clinvar-gkm-parquet` release, deprecated: the ClinVar-GKM default bundle, its release model and its fixed table specs
+> ([ADR 0008](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md),
+> [ADR 0009](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0009-generic-gkm-bundle-tool-renamed.md)).
+> See [Migrating from 1.x](#migrating-from-1x). On `main` the removals are in and the rename is not yet: it comes last, so
+> until then the package, the command and the key-value prefix keep the 1.x name, `clinvar-gkm-parquet`, as the examples
+> below do.
 
 ## Versioning
 
-This tool is versioned **independently** of the ClinVar-GKM bundle schema, because the two release on
-different cadences ([ADR 0002](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0002-independent-tool-versioning.md)). Every release states:
+This tool is versioned **independently** of any bundle schema, because they release on different cadences
+([ADR 0002](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0002-independent-tool-versioning.md)).
+Every release states the table spec it writes, with its version, and the bundles it reads. From 2.0.0 that is one spec,
+`sections`, compiled for **any bundle from its schema and its column set** (a *pairing*;
+[ADR 0006](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0006-sections-spec-compiled-from-schemas.md),
+[format](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/column-set-format.md)). A pairing that
+doesn't load or compile is refused with the reason. The tool lists no producer's `schema_version`s: the producer publishes
+its schema and column set, and says which of its versions they read.
 
-- the built-in Parquet **table specs** it writes, each with its own version, and which one is the default
-  ([ADR 0003](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0003-pluggable-table-specs.md)). A spec defines the tables and columns;
-- the bundles they read. `sections` compiles a table spec for **any bundle plus its schema and column-set file**
-  ([ADR 0006](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0006-sections-spec-compiled-from-schemas.md),
-  [format](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/column-set-format.md)). With neither given it reads the tool's default, ClinVar-GKM bundles, by the
-  bundle's own `schema_version`: the snapshotted versions work offline, any other is fetched once and cached, and a version
-  whose pairing can't load or compile is refused with the reason. `baseline`, `clinvar-gkm` and a custom spec read the
-  versions they list and refuse any other.
+| Tool version | Reads | Table specs written |
+| --- | --- | --- |
+| 1.0.0 | any bundle with its pairing; ClinVar-GKM by default (snapshot: 1.1.0); `baseline`, `clinvar-gkm`: ClinVar-GKM 1.1.0 | `sections` 1.0 (default; draft), `baseline` 1.0 (draft), `clinvar-gkm` 1.0 (draft) |
+| 1.0.1 | as 1.0.0 | as 1.0.0 |
+| 1.1.0 | as 1.0.0; the default bundle, `baseline` and `clinvar-gkm` deprecated | as 1.0.0 |
+| 2.0.0 (planned) | any bundle with its pairing (required); no default bundle | `sections` 1.0 (draft) |
 
-| Tool version | `sections` reads | `baseline`, `clinvar-gkm` read | Built-in table specs |
-| --- | --- | --- | --- |
-| 1.0.0 | any bundle with its pairing; ClinVar-GKM by default (snapshot: 1.1.0) | 1.1.0 | `sections` 1.0 (default; draft), `baseline` 1.0 (draft), `clinvar-gkm` 1.0 (draft) |
-| 1.0.1 | any bundle with its pairing; ClinVar-GKM by default (snapshot: 1.1.0) | 1.1.0 | `sections` 1.0 (default; draft), `baseline` 1.0 (draft), `clinvar-gkm` 1.0 (draft) |
-| 1.1.0 | any bundle with its pairing; ClinVar-GKM by default, deprecated (snapshot: 1.1.0) | 1.1.0 | `sections` 1.0 (default; draft), `baseline` 1.0 (draft; deprecated), `clinvar-gkm` 1.0 (draft; deprecated) |
+`sections`: one table per bundle collection (20 in ClinVar-GKM 1.1.0), keyed by `id`, compiled from a bundle schema and its
+column set, with every record property its own typed column (named as the property; pointers as bare ids; extensions in
+`value_<type>` slots by the JSON type of their value) and no `data` column. A property, value type or record shape the spec
+doesn't cover stops the build. It is lossless
+([ADR 0005](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0005-lossless-sections-build.md)):
+each table also has `ordinal` (the record's position in its section) and, for a pointer with several target sections,
+`<column>_section`, and root values that aren't collections go in a `root_values` table. The build checks every row.
+`rebuild` writes back a bundle in the line layout byte for byte; any other layout JSON-equal, in the canonical line layout.
+The manifest says which.
 
-- `sections`: one table per bundle collection (20 in ClinVar-GKM 1.1.0), keyed by `id`, compiled from a bundle schema and
-  its column set, with every record property its own typed column
-  (named as the property; pointers as bare ids; extensions in `value_<type>` slots by the JSON type of their
-  value) and no `data` column. A property, value type or record shape the spec doesn't cover stops the build.
-  It is lossless ([ADR 0005](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0005-lossless-sections-build.md)): each table also has `ordinal`
-  (the record's position in its section) and, for a pointer with several target sections, `<column>_section`, and root
-  values that aren't collections go in a `root_values` table. The build checks every row. `rebuild` writes back a bundle in
-  the line layout byte for byte; any other layout JSON-equal, in the canonical line layout. The manifest says which.
-- `baseline`: one table per bundle section (20), each `id`, `refs` (every `#/<section>/<id>` pointer in the
-  record) and `data` (the record, byte for byte).
-- `clinvar-gkm`: the 22 tables of ClinVar-GKM's published Parquet set, with typed columns matching its BigQuery
-  export; the spec the oracle compares and the one ClinVar-GKM's release build names.
+`version --json` gives the same: `tool_version`, `table_spec`, `table_spec_version`, `schema_version_rule`, the key-value
+prefix it writes (`kv_prefix`), the DuckDB version and `validate`'s engines.
 
-`version --json` gives the same (`table_specs`, each with `deprecated`, `default_table_spec`, `schema_version_rule`,
-`snapshotted_schema_versions`). See the
-[design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md#92-compatibility-matrix-planned) for the planned releases.
-
-Each Parquet file records, in its key-value metadata, the tool version, the spec's name and version (for a custom spec, also
-the sha256 of its file; for `sections`, the sha256 of its schema set, its column set and what its compiled spec makes of
-the tables), the source bundles' sha256s, for a lossless build the sha256 of its section's text and, for a selective build,
-the selection ([design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md#72-key-value-metadata-every-file) §7.2). A `sections` set also
-holds its compiled spec (`table-spec.json`), so `verify` and `rebuild` need neither the schema nor the column set.
+Each Parquet file records, in its key-value metadata (prefix `clinvar_gkm_parquet.`, `gkm_bundle_parquet.` after the
+rename), the tool version, the spec's name and
+version, the sha256 of the schema set, the column set and the compiled spec, the source bundle's sha256, for a lossless
+build the sha256 of its section's text and, for a selective build, the selection
+([design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md#72-key-value-metadata-every-file)
+§7.2). A set also holds its compiled spec (`table-spec.json`), so `verify` and `rebuild` need neither the schema nor the
+column set. They also read sets built by 1.x with `sections`.
 
 ## Install
 
 ```sh
-uvx clinvar-gkm-parquet@1.1.0 version --json   # run a pinned release with no install
-pipx install clinvar-gkm-parquet==1.1.0        # or install it
+uvx gkm-bundle-parquet@2.0.0 version --json   # run a pinned release with no install (planned)
+pipx install gkm-bundle-parquet==2.0.0        # or install it
 ```
 
 Python 3.10 or later. DuckDB is pinned exactly, because the output bytes depend on it, so an isolated environment
@@ -82,125 +69,119 @@ Python 3.10 or later. DuckDB is pinned exactly, because the output bytes depend 
 
 `validate --engine python`, the reference validator, needs the `reference` extra (the GA4GH GKM Toolkit, `ga4gh.gkm`
 0.4.0, Python 3.11 or later), whose GA4GH dependencies are pre-releases:
-`uv tool install --prerelease=allow 'clinvar-gkm-parquet[reference]'` or `pip install --pre 'clinvar-gkm-parquet[reference]'`.
+`uv tool install --prerelease=allow 'gkm-bundle-parquet[reference]'` or `pip install --pre 'gkm-bundle-parquet[reference]'`.
 The default engine needs nothing extra.
 
 ## Usage
 
-The examples use ClinVar-GKM bundles, the tool's default today. Any GKM bundle works with its schema and column set
-(`--bundle-schema` and `--column-set`; [format](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/column-set-format.md)). The
-ClinVar-GKM-only parts are deprecated in 1.1.0 and go in 2.0.0 (planned; ADRs 0008 and 0009): see
-[Deprecations](#deprecations).
+Every command that reads a bundle takes one bundle (`--full`, a path or URL) and its pairing: `--bundle-schema` (a schema
+file, a URL, or a schema-set directory) and `--column-set`. `--sha256` gives the bundle's expected sha256; without it, a
+`<file>.sha256` sidecar is used when there is one. Which release a file is, and which file to read, is the producer's
+business. The examples use ClinVar-GKM's 1.1.0 pairing; ClinVar-GKM publishes it with its bundles.
 
 ```sh
-# The sections spec (the default): one table per bundle section, a typed column per record property
-clinvar-gkm-parquet build --full clinvar-gkm_2026-1018.json.gz --out out/
+P="--bundle-schema clinvar-gkm-1.1.0/schema-set --column-set clinvar-gkm-1.1.0/columns.yaml"
 
-# The baseline spec: one table per bundle section, each id, refs and the record verbatim (data)
-clinvar-gkm-parquet build --spec baseline --full clinvar-gkm_2026-1018.json.gz --out out/
+# One table per bundle collection, a typed column per record property
+clinvar-gkm-parquet build --full clinvar-gkm_2026-1018.json.gz $P --out out/
 
-# ClinVar-GKM's published layout (the BigQuery-parity build), from a monthly plus the weeks after it
-clinvar-gkm-parquet build --spec clinvar-gkm-1.0 --full clinvar-gkm_2026-10.json.gz \
-    --delta clinvar-gkm-delta_2026-1025.json.gz --out out/
-
-# Your own spec file: typed tables of any sections, no SQL needed
-clinvar-gkm-parquet build --spec my-tables.yaml --full clinvar-gkm_2026-1018.json.gz --out out/
+# A bundle by URL, with its expected sha256
+clinvar-gkm-parquet build --full https://example.org/bundle.json.gz --sha256 <hex> $P --out out/
 
 # A selection: one submitter and every record that points to it (its SCVs)
-clinvar-gkm-parquet build --full clinvar-gkm_2026-1018.json.gz --out omim/ \
+clinvar-gkm-parquet build --full clinvar-gkm_2026-1018.json.gz $P --out omim/ \
     --driver submitter --where "name = 'OMIM'" --follow in --max-depth 1
 
 # The same selection's mini-bundle only (byte-identical to the one the build used)
-clinvar-gkm-parquet select --full clinvar-gkm_2026-1018.json.gz --out omim.json.gz \
+clinvar-gkm-parquet select --full clinvar-gkm_2026-1018.json.gz $P --out omim.json.gz \
     --driver submitter --where "name = 'OMIM'" --follow in --max-depth 1
 
-# --where reads the driver table as the chosen spec builds it: with --spec baseline, the record is `data`
-clinvar-gkm-parquet build --spec baseline --full clinvar-gkm_2026-1018.json.gz --out omim/ \
-    --driver submitter --where "data->>'\$.name' = 'OMIM'" --follow in --max-depth 1
+# A CIViC bundle: no version, pretty-printed, empty collections and root values
+clinvar-gkm-parquet build --full civic-assertion-bundle.json \
+    --bundle-schema civic/schema-set --column-set civic/civic.columns.yaml --out civic/
 
-# Any producer's bundle, with its schema and column set (docs/column-set-format.md)
-clinvar-gkm-parquet build --bundle-schema my.schema.json --column-set my.columns.yaml --full my-bundle.json --out out/
+# The columns a pairing gives, with no build
+clinvar-gkm-parquet compile-spec $P > sections.yaml
 
-# A selection from any producer's bundle: its version property (if any) and sections come from the pairing
-clinvar-gkm-parquet select --bundle-schema my.schema.json --column-set my.columns.yaml --full my-bundle.json \
-    --driver assertion --out assertion.json.gz
-
-# The columns a pairing or a default version gives, with no build
-clinvar-gkm-parquet compile-spec --bundle-schema my.schema.json --column-set my.columns.yaml
-clinvar-gkm-parquet compile-spec 1.1.0 > sections-1.1.0.yaml
-
-# Back from Parquet to the bundle: a full sections build rebuilds the bundle's text byte for byte
+# Back from Parquet to the bundle: a full build rebuilds the bundle's text byte for byte (no schema needed)
 clinvar-gkm-parquet rebuild out/ -o clinvar-gkm_2026-1018.json.gz
 
 # Validate every record against the bundle's JSON Schema set (the default engine, jsonschema-rs; docs/validate.md)
-clinvar-gkm-parquet validate clinvar-gkm_2026-1018.json.gz
-clinvar-gkm-parquet validate clinvar-gkm-delta_2026-1031.json.gz --bundle-schema my-schema-set/ --failures bad.jsonl
+clinvar-gkm-parquet validate clinvar-gkm-delta_2026-1031.json.gz --bundle-schema clinvar-gkm-1.1.0/schema-set \
+    --version-property schema_version --failures bad.jsonl
 # The same with the GKM Toolkit's validator, the reference the default is checked against (much slower)
-clinvar-gkm-parquet validate clinvar-gkm-delta_2026-1031.json.gz --engine python
+clinvar-gkm-parquet validate clinvar-gkm-delta_2026-1031.json.gz --bundle-schema clinvar-gkm-1.1.0/schema-set \
+    --version-property schema_version --engine python
 
 # Checks: the directory on its own; a full build against its bundle; a selection against its mini-bundle;
 # the round trip (the rebuilt text against the recorded hashes and, with --full, the bundle's own text)
 clinvar-gkm-parquet verify out/
-clinvar-gkm-parquet verify out/ --bundle-recompute --full clinvar-gkm_2026-1018.json.gz
+clinvar-gkm-parquet verify out/ --bundle-recompute --full clinvar-gkm_2026-1018.json.gz $P
 clinvar-gkm-parquet verify omim/ --bundle-recompute --full omim.json.gz
 clinvar-gkm-parquet verify out/ --roundtrip --full clinvar-gkm_2026-1018.json.gz
 ```
 
-`validate` checks each record alone, as a one-section bundle with the bundle's `schema_version`, so key patterns are
-checked too, as ClinVar-GKM's validator does. A bundle whose schema (`--bundle-schema`) declares no `schema_version` is
-validated with no version, unless `--version-property` names one. The root's own `required` (CIViC's lists every root
-property) is checked once, on the names the whole bundle holds, not on each record ([docs/validate.md](docs/validate.md)). It
-exits 1 if any record fails, naming its section, key and instance paths, or if the bundle lacks a name that `required` lists,
-and 2 on anything that isn't a verdict on a record (an unreadable bundle, an unknown section, a missing version, a schema
-set that doesn't load). Its two engines give the same verdicts on every record of the 2026-10-31 delta and a sample of the
-2026-10-31 full, with the published 1.1.0 schemas and ClinVar-GKM's narrowed ones, and on the two CIViC bundles;
+`build`, `select` and `compile-spec` without both `--bundle-schema` and `--column-set`, and `validate` without
+`--bundle-schema`, stop with exit 2 and say so. `verify` needs no schema; given a pairing, it also checks that the pairing
+compiles to the spec that wrote the files (the three hashes every file records), and exits 1 if it doesn't.
+
+`--memory-limit` (`build`, `select`, `rebuild`, `verify`) sets DuckDB's memory limit, e.g. `12GB`. Without it, the limit is
+half the memory the process may use: the machine's physical memory, or its cgroup limit when that is lower (a container).
+DuckDB's own default, 80% of physical memory, bounds only its buffers and left too little for the rest of the process on
+a 32 GB machine. The limit doesn't change the files: a build that spills to `--work-dir` writes the same bytes.
+
+`validate` checks each record alone, as a one-section bundle, so key patterns are checked too, as ClinVar-GKM's validator
+does. `--version-property` names the root property holding the bundle's version, which then goes into every record's
+one-section bundle; there is no default name (ADR 0009). Without it, a version at the root is validated as a root value. The
+root's own `required` (CIViC's lists every root property) is checked once, on the names the whole bundle holds, not on each
+record ([docs/validate.md](docs/validate.md)). It exits 1 if any record fails, naming its section, key and instance paths, or
+if the bundle lacks a name that `required` lists, and 2 on anything that isn't a verdict on a record (an unreadable bundle,
+an unknown section, a missing version, a schema set that doesn't load). Its two engines give the same verdicts on every
+record of the ClinVar-GKM 2026-10-31 delta and a sample of the 2026-10-31 full, with the published 1.1.0 schemas and
+ClinVar-GKM's narrowed ones, and on the two CIViC bundles;
 [docs/validate.md](docs/validate.md) has the evidence, the known differences and the timings.
 
 `rebuild` writes gzip when the output name ends in `.gz`; the gzip bytes differ from the published file (header
 and compressor), the uncompressed text does not, and its sha256 is checked against the build's manifest
 (`source_text_sha256`) and each file's `section_text_sha256`. It refuses anything it can't reproduce exactly:
-another spec, a selection, a build with deltas or `--tables`, a missing table, manifest or ordinal, a pointer outside its
+a selection, a build with `--tables` (or, by 1.x, with deltas), a missing table, manifest or ordinal, a pointer outside its
 targets ([ADR 0005](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0005-lossless-sections-build.md)).
 
-Selection options (`build` and `select`): `--driver <table>` (a table of the chosen spec), `--where` (a DuckDB
-boolean expression over that table as the spec builds it), `--ids k1,k2` and `--ids-file` (added to the
-`--where` keys; with neither, every row of the driver table), `--follow out|in|both` (default `out`),
-`--max-depth N` and `--sections a,b,c`. With `--bundle-schema` and `--column-set` (not with `--delta`), a selection reads
-the bundle's root by the pairing: its version property, if it has one, and its sections, so a bundle with no version, empty
-collections, root values (kept in the mini-bundle) or another JSON layout (read whole) works too. See [ADR 0004](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0004-driver-based-selection.md) and the
-[design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md) §4.5 and §10. `verify --spec <file>` is required for a custom
-spec; `verify --against` (the oracle) takes a full `clinvar-gkm` build only.
+Selection options (`build` and `select`): `--driver <table>`, `--where` (a DuckDB boolean expression over that table as the
+spec builds it), `--ids k1,k2` and `--ids-file` (added to the `--where` keys; with neither, every row of the driver table),
+`--follow out|in|both` (default `out`), `--max-depth N` and `--sections a,b,c`. A selection reads the bundle's root by the
+pairing: its version property, if it has one, and its sections, so a bundle with no version, empty collections, root values
+(kept in the mini-bundle) or another JSON layout (read whole) works too. See
+[ADR 0004](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0004-driver-based-selection.md)
+and the [design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md)
+§4.5 and §10.
 
-A spec file uses the format of the built-in ones (`spec/1.0/tables.yaml`, or `compile-spec` for `sections`;
-reference in `src/clinvar_gkm_parquet/spec.py`). Its tables need no SQL: each column names a derivation kind
-(`scalar-path`, `bare-id`, `pointer-section`, `typed-copy`, `extension-slot`, `range-exact`, `range-min`,
-`range-max`, `refs`, `ordinal`, plus the `key` and an optional `record` column) and a path such as `$.name` or
-`$.contributions[*].contributor`; extension slots go by name or, with `json-type`, by the JSON type of the value.
-A spec that should rebuild the bundle states `lossless: true`, an `ordinal` column and a `json` block per table,
-and the `targets` of every pointer (as `compile-spec`'s output does). Example:
-[`tests/fixtures/custom-spec/tables.yaml`](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/tests/fixtures/custom-spec/tables.yaml). Only `computed` columns and
-row filters need a SQL file the tool ships.
+## Migrating from 1.x
 
-## Deprecations
+2.0.0 removes what 1.1.0 deprecated. The output of a `sections` build with a pairing doesn't change, except for the
+key-value prefix (`gkm_bundle_parquet.` for `clinvar_gkm_parquet.`), the `tool_version` entry, the manifest's `builder`
+and, where 1.1.0 read a release from an option or a published file name, the `source_release` entry, now always empty (see
+the [changelog](CHANGELOG.md) for the manifest fields).
 
-1.1.0 is the last release under the name `clinvar-gkm-parquet`. What 2.0.0 removes (planned; ADRs 0008 and 0009) still
-works, and each use prints one line on stderr, `clinvar-gkm-parquet: deprecated: ...`, naming the replacement. The output
-files, the exit codes and stdout don't change.
-
-| Deprecated | Replacement |
+| 1.x | 2.0.0 |
 | --- | --- |
-| The name `clinvar-gkm-parquet` (every run says so) | `gkm-bundle-parquet` from 2.0.0 ([repository](https://github.com/clingen-data-model/gkm-bundle-parquet)), the same commands |
-| `--release`, `--index`, `--delta`, `--manifest`, `--full-source-release` | resolve the release yourself and pass one bundle with `--full` and `--sha256`, or a `<file>.sha256` sidecar |
-| `build`, `select` or `validate` without `--bundle-schema` (the built-in default bundle) | give the bundle's schema with `--bundle-schema` (and `--column-set` for `build` and `select`) |
-| `--spec clinvar-gkm` (also `clinvar-gkm-1.0`, `clinvar-gkm@1.0`), `--spec baseline`, a `tables.yaml` as `--spec` | the default `sections` spec with `--bundle-schema` and `--column-set`, and a column set for other tables |
+| `clinvar-gkm-parquet` (package `clinvar_gkm_parquet`) | `gkm-bundle-parquet` (package `gkm_bundle_parquet`), the same commands |
+| `--release`, `--index`, `--delta`, `--manifest`, `--full-source-release` | resolve the release yourself and pass one bundle with `--full`, plus `--sha256` or a `<file>.sha256` sidecar |
+| `build`, `select`, `compile-spec` or `validate` without `--bundle-schema` (the built-in ClinVar-GKM default) | give the bundle's schema with `--bundle-schema` (and `--column-set` for `build`, `select` and `compile-spec`) |
+| `compile-spec <schema_version>` | `compile-spec --bundle-schema <schema> --column-set <column set>` |
+| `--spec sections`, `--spec clinvar-gkm`, `--spec baseline`, a `tables.yaml` as `--spec` | no `--spec`: the `sections` spec compiled from the pairing, and a column set for other tables |
+| `verify --spec` | nothing: `verify` reads the spec the build wrote beside its manifest |
 | `verify --against` (the oracle comparison) | `verify --bundle-recompute` and `verify --roundtrip` |
-| `compile-spec <schema_version>` (the default bundle) | `compile-spec --bundle-schema <schema> --column-set <column set>` |
+| `validate` with the version property `schema_version` by default | `--version-property schema_version` |
+
+`verify` and `rebuild` still read `sections` sets built by 1.x. Sets built by 1.x with `baseline`, `clinvar-gkm`, a custom
+spec or from deltas are refused: check them with the 1.x tool that wrote them.
 
 ## Design records
 
-- [Design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md): scope, table spec, inputs and delta replay, engine, CLI,
-  testing (including the oracle against ClinVar-GKM's current export), rollout, and open decisions. It records the
-  ClinVar-GKM-specific design; ADRs 0008 and 0009 replace parts of it.
+- [Design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md): the
+  history of the ClinVar-GKM-specific design (table spec, inputs and delta replay, engine, CLI, testing, rollout). ADRs 0008
+  and 0009 replace large parts of it.
 - [Architecture decision records](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/README.md):
   [0001 — Parquet is derived from the bundles](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0001-parquet-derived-from-bundles.md),
   [0002 — Independent tool versioning](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0002-independent-tool-versioning.md),

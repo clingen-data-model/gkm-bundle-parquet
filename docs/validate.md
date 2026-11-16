@@ -1,6 +1,6 @@
 # `validate`: JSON Schema validation of a bundle, fast and proved equal to the reference
 
-`clinvar-gkm-parquet validate <bundle>` checks every record of a bundle against its JSON Schema set. ClinVar-GKM validates
+`clinvar-gkm-parquet validate <bundle> --bundle-schema <schema>` checks every record of a bundle against its JSON Schema set. ClinVar-GKM validates
 every published bundle strictly with the GA4GH GKM Toolkit (`ga4gh.gkm` 0.4.0), whose validator is Python `jsonschema`. That
 takes days of CPU time for a full bundle. This command gives the same verdicts with jsonschema-rs, in minutes. The evidence
 that the verdicts are the same is below.
@@ -8,12 +8,14 @@ that the verdicts are the same is below.
 ## How it validates
 
 - **One record at a time, as ClinVar-GKM does.** Each record is validated alone, as the one-section bundle
-  `{"schema_version": <the bundle's own>, <section>: {<key>: <record>}}`, the shape ClinVar-GKM's
-  `src/scripts/validate-bundle.py` passes to the toolkit, so each section's key pattern is checked too. An empty section is
-  validated as `{"schema_version": ..., <section>: {}}`. A verdict is per record.
-- **The version property** is `--version-property`, or else `schema_version`. From 1.1.0, a schema given with
-  `--bundle-schema` whose root declares no `schema_version` (CIViC's, `tests/fixtures/civic/`) has none, unless
-  `--version-property` names one: each record is then validated as `{<section>: {<key>: <record>}}` (ADR 0009).
+  `{<version property>: <the bundle's own>, <section>: {<key>: <record>}}`; for ClinVar-GKM, with `--version-property
+  schema_version`, that is the shape its `src/scripts/validate-bundle.py` passes to the toolkit, so each section's key
+  pattern is checked too. An empty section is validated as `{<version property>: ..., <section>: {}}`. A verdict is per
+  record.
+- **The version property** is `--version-property`; there is no default name (ADR 0009; 1.x defaulted to
+  `schema_version`, or to none for a `--bundle-schema` whose root declares no `schema_version`). Without it, each record
+  is validated as `{<section>: {<key>: <record>}}`, and a version at the root is validated as a root value, against its
+  property in the schema.
 - **The root's `required` is checked once, on the whole bundle.** It says which root properties the bundle holds, so a
   one-section mini-bundle can't meet it: CIViC's root `required`s all 19 of its root properties, and until this change
   every CIViC record failed, each only on the other 18. So each mini-bundle is validated against the root schema
@@ -29,11 +31,11 @@ that the verdicts are the same is below.
   top-level `required` is handled this way. A `required` nested in a root `allOf`, `dependentRequired`, or a root
   `minProperties` above 1 would still be applied to each mini-bundle; none of the published 1.1.0, narrowed or CIViC
   roots has one (ClinVar-GKM's has `minProperties: 1`, which every mini-bundle meets).
-- **The bundle is streamed** with the tool's own reader (`bundle.py`), and its sha256 is checked against the line index or a
+- **The bundle is streamed** with the tool's own reader (`bundle.py`), and its sha256 is checked against `--sha256` or a
   `.sha256` sidecar when there is one. Records are parsed and validated in worker processes (`--workers`, default: the CPU
   count).
-- **The schema set** is the one a build uses: `--bundle-schema` (a file, URL or schema-set directory), or by default the
-  default bundle's set at the bundle's own `schema_version`. Both engines are built from the same loaded `SchemaSet`
+- **The schema set** is the one a build uses: `--bundle-schema` (a file, URL or schema-set directory), required; without it
+  `validate` stops with exit 2. Both engines are built from the same loaded `SchemaSet`
   (`schemas.py`). Nothing is fetched while validating: a `$ref` outside the set stops the run.
 - **Exit codes:** 0 when every record passes; 1 when any fails, each named by section, key and instance paths (stderr, and
   every one in `--failures` as JSON lines), or when the bundle lacks a root property its root `required`s; 2 for anything
@@ -64,7 +66,8 @@ never applied; the equivalence runs below check it anyway. The python engine use
 The gate for making `rs` the default: both engines give every record the same verdict, on real data and on generated
 negative cases, with each schema set:
 
-- **published:** the published 1.1.0 set, the tool's snapshot in `schemas/1.1.0/`;
+- **published:** the published 1.1.0 set, vendored as `tests/fixtures/clinvar-gkm/1.1.0/schema-set/` (until 1.1.0, the tool's
+  snapshot in `schemas/1.1.0/`);
 - **narrowed:** ClinVar-GKM's narrowed profiles at commit `a956b5a` (`tests/fixtures/schema-sets/`, see its README), which
   set unused base properties to `false`, limit pointers to their target section, close extensions, add enums, and match
   each section's keys exactly;
@@ -190,9 +193,10 @@ CPU per record, by section, on the delta (compile time apart):
 ```sh
 uv sync --extra reference                      # both engines
 uv run python scripts/sample-bundle.py clinvar-gkm_2026-1031.json.gz sample.json.gz --every 100 --per-shape 2 \
-    --index index.json
-uv run python scripts/validate-equivalence.py sample.json.gz out/ \
-    --schema-set narrowed=tests/fixtures/schema-sets/clinvar-gkm-narrowed-a956b5a --schema-set published=schemas/1.1.0
+    --bundle-schema tests/fixtures/clinvar-gkm/1.1.0/schema-set --version-property schema_version
+uv run python scripts/validate-equivalence.py sample.json.gz out/ --version-property schema_version \
+    --schema-set narrowed=tests/fixtures/schema-sets/clinvar-gkm-narrowed-a956b5a \
+    --schema-set published=tests/fixtures/clinvar-gkm/1.1.0/schema-set
 uv run python scripts/validate-equivalence.py tests/fixtures/civic/civic-assertion-9-bundle.json out-civic/ \
     --schema-set civic=tests/fixtures/civic/schema-set
 uv run pytest tests/test_validate.py

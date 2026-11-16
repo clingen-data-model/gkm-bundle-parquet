@@ -3,7 +3,7 @@
 A small, connected excerpt of the 2026-10-31 ClinVar-GKM 1.1.0 weekly full
 (`https://data.clinvar-gkm.org/v1/1.1/weekly/clinvar-gkm_2026-1031.json.gz`, 91,854,927 records, sha256
 `7105eba1d88f22359e94d8d813a1e7b3afd00afe1b2e528180ea312267392c20`, checked against the published one), made by
-`scripts/extract-fixtures.py` like `real-1.1.0/`. Its source, counts and seeds are in `PROVENANCE.json`: 345 records in all
+`scripts/extract-fixtures.py` like `real-1.1.0/` (removed in 2.0.0; run it from the 1.1.0 source). Its source, counts and seeds are in `PROVENANCE.json`: 345 records in all
 20 sections, 36,818 bytes.
 
 It covers what the suite's main fixture (`real-1.1.0/`, a 2026-10-18 excerpt) lacks, so that `tests/test_validate.py`'s

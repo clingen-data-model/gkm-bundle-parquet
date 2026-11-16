@@ -1,8 +1,9 @@
 # CLAUDE.md
 
-Project-wide invariants for gkm-bundle-parquet (renamed from clinvar-gkm-parquet 2026-11-16; the package, CLI and PyPI project keep the old name until 2.0.0, ADR 0009). Keep this file short (under about 120 lines) and limited to
-things that are true across the whole repo. Path-specific conventions live in `.claude/rules/` (loaded only when
-working on matching files); one-off decisions live in `docs/decisions/` (ADRs). Change this file via PR review.
+Project-wide invariants for gkm-bundle-parquet (renamed from clinvar-gkm-parquet 2026-11-16; the package, CLI and PyPI
+project keep the old name until the rename in 2.0.0, ADR 0009). Keep this file short (under about 120 lines) and
+limited to things that are true across the whole repo. Path-specific conventions live in `.claude/rules/` (loaded only
+when working on matching files); one-off decisions live in `docs/decisions/` (ADRs). Change this file via PR review.
 
 ## General rules
 
@@ -17,13 +18,14 @@ working on matching files); one-off decisions live in `docs/decisions/` (ADRs). 
 This repo builds a downloadable, versioned tool that turns **GKM JSON bundles** into Parquet and back, and validates
 them: any bundle built on the GA4GH GKM classes (VRS, Cat-VRS, VA-Spec), with that bundle's JSON Schema. The end
 state is in [ADR 0008](docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md) (accepted) and
-[ADR 0009](docs/decisions/0009-generic-gkm-bundle-tool-renamed.md) (accepted):
+[ADR 0009](docs/decisions/0009-generic-gkm-bundle-tool-renamed.md) (accepted; 2.0.0 implements both):
 
-- **No producer is built in.** The tool names no producer and assumes none; each run is given the bundle's schema.
-  The first producer is [ClinVar-GKM](https://github.com/clingen-data-model/clinvar-gkm) (local clone:
-  `~/Development/gks/clinvar-gks`); real CIViC bundles (`tests/fixtures/civic/`) are the second. Until 2.0.0, ClinVar-GKM
-  is still the default and its release model (line index, deltas, replay) is still in the tool; both leave in 2.0.0.
-  Don't add producer-specific logic, names or URLs to the code; a producer's facts are data (its schema, column set).
+- **No producer is built in.** The tool names no producer and assumes none; each run is given one bundle and its
+  pairing (its schema and column set), and there is no default. ClinVar-GKM
+  ([repo](https://github.com/clingen-data-model/clinvar-gkm), local clone `~/Development/gks/clinvar-gks`) and CIViC
+  (`tests/fixtures/civic/`) are examples and test producers. A producer's release model (indexes, deltas, which file to
+  read) is the producer's. Don't add producer-specific logic, names or URLs to the package; a producer's facts are data
+  (its schema, its column set). `tests/test_any_bundle.py` scans every module and SQL file for it.
 - **The JSON bundles are the public record. Parquet is a derived convenience**, a quick way to query the bundle
   content with current database tools.
 - **Invariant: Parquet derives from the bundle.** Every Parquet row and value must be recomputable from the bundle
@@ -43,28 +45,27 @@ See [ADR 0002](docs/decisions/0002-independent-tool-versioning.md). In short:
 - **Tool version:** semver, independent of the bundle schema version (they release on different cadences).
 - **Table-spec version:** `MAJOR.MINOR`, versioned separately from the tool. It defines the tables, columns,
   types and derivations. MINOR = additive (new table, new trailing column); MAJOR = anything else.
-- **Compatibility matrix:** every tool release declares the table-spec versions it writes and what it reads.
-  `sections` is compiled from a bundle schema and its column set, and refuses a pairing that doesn't load and compile
-  (ADR 0006). In 1.x, with neither given it reads ClinVar-GKM's schema at the bundle's `schema_version`, and `baseline`,
-  `clinvar-gkm` and a custom spec refuse any version not in their list; from 2.0.0 the matrix lists no producer's
-  versions (ADR 0009). The matrix lives in `README.md` and in `version --json`; keep both in sync.
-- Each Parquet file records the tool version, the table-spec version and the source bundle sha256(s) in its
-  key-value metadata; a compiled `sections` file also the sha256 of its schema set, column set and compiled spec.
+- **Compatibility matrix:** every tool release declares the table-spec versions it writes and what it reads. From
+  2.0.0 the one spec is `sections`, compiled from a bundle schema and its column set; a pairing that doesn't load and
+  compile is refused (ADR 0006), and the matrix lists no producer's versions (ADR 0009). The matrix lives in `README.md`
+  and in `version --json`; keep both in sync.
+- Each Parquet file records the tool version, the table-spec version, the source bundle sha256 and the sha256 of its
+  schema set, column set and compiled spec in its key-value metadata (prefix `clinvar_gkm_parquet.` until the rename).
 
 ## Testing and verification
 
 - **Real data, not hand-built samples.** Unit-test fixtures are small excerpts of real published bundles (ClinVar-GKM,
   CIViC), with the source URL, release and sha256 recorded. A hand-written record can hide a real-data shape.
 - **The round trip is the check:** a build rebuilds every record and compares it with its source; `verify
-  --bundle-recompute` and `verify --roundtrip` check a built set against its bundle. The BigQuery oracle no longer
-  gates anything (ADR 0008).
+  --bundle-recompute` and `verify --roundtrip` check a built set against its bundle. The BigQuery oracle was removed
+  in 2.0.0 (ADR 0008).
 - **`validate`'s engines must agree:** a change to validation reruns the equivalence evidence (docs/validate.md).
 - A bundle the schema can't read, an unknown bundle section, or an unknown extension name: fail loudly. Never drop
   rows or values silently.
 
 ## Reading ClinVar-GKM's published data
 
-For fixtures and evidence runs (ClinVar-GKM's data access rules; they leave the tool's code in 2.0.0):
+For fixtures and evidence runs only (ClinVar-GKM's data access rules; the tool's code knows none of this):
 
 - Base URL `https://data.clinvar-gkm.org`. Release index: `/index.json` (root manifest, lists the lines) and
   one index per line (`/v1/1.1/index.json`, provisional path), which gives each monthly's `sha256` and
@@ -88,11 +89,11 @@ For fixtures and evidence runs (ClinVar-GKM's data access rules; they leave the 
 ## Where things live
 
 - `docs/plans/` — design plans. [2026-10-20-design.md](docs/plans/2026-10-20-design.md) is the history of the
-  ClinVar-GKM-specific design; ADRs 0008 and 0009 replace parts of it.
+  ClinVar-GKM-specific design; ADRs 0008 and 0009 replace large parts of it.
 - `docs/decisions/` — ADRs, one per decision; `README.md` is the index.
 - `.claude/rules/` — path-scoped conventions:
   - [`python.md`](.claude/rules/python.md) — package code and tests (`src/**`, `tests/**`, `pyproject.toml`)
-  - [`table-spec.md`](.claude/rules/table-spec.md) — the table spec and its bump rules (`spec/**`, table SQL)
+  - [`table-spec.md`](.claude/rules/table-spec.md) — the `sections` rules and their bump rules (compiler, SQL)
   - [`docs.md`](.claude/rules/docs.md) — design records and the README (`docs/**`, `README.md`)
 - `.claude/skills/` — `pr` (open a PR), `release-tool` (cut a tool release, update the matrix).
 - `/catchup` (`.claude/commands/catchup.md`) — what changed here and in ClinVar-GKM since you last looked.

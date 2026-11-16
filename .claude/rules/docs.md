@@ -21,7 +21,7 @@ paths:
 
 ## Docs move with every PR
 
-A PR that changes CLI behaviour, the table spec, accepted `schema_version`s or the compatibility matrix updates
+A PR that changes CLI behaviour, the table spec or the compatibility matrix updates
 the README, the changelog and any affected plan or ADR in the same PR, and says in its body which producer page
 (ClinVar-GKM's today) needs a paired change.
 
