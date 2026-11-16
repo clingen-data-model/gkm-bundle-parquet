@@ -25,25 +25,33 @@ Every step that publishes (tag push, PyPI, GitHub Release) needs the user's expl
 
 ## 2. Verify before tagging
 
-- `uv run ruff check` and `uv run pytest` pass.
+- `uv sync --locked`, `uv run ruff check`, `uv run ruff format --check` and `uv run pytest` pass (what CI and
+  `release.yml` run).
 - For every `schema_version` the release snapshots or a fixed spec lists, run `build` then `verify` on a **real published bundle**
   of that version (a monthly full, plus a delta chain if replay changed), and record the commands and results.
-- If the table spec or the build logic changed: rerun the oracle against ClinVar-GKM's published latest Parquet
-  for the same release (design plan §8), or the bundle recompute if no BigQuery export exists for that release.
-  Every difference is fixed or listed and accepted by the user.
+- If the table spec or the build logic changed: run `verify --bundle-recompute` and `verify --roundtrip` on a real
+  bundle (the BigQuery oracle gates nothing since ADR 0008). Every difference is fixed or listed and accepted by the user.
 - Run the build twice and compare file sha256s: the same inputs must give byte-identical files.
+- If the release claims unchanged output, compare the files of the same builds (default `sections`, the fixed specs, a
+  selection, a CIViC pairing) from the previous release and this one: they differ only in the `tool_version` key-value
+  entry (replace the old version string with the new one in the old file's bytes and compare).
 
 ## 3. Update the compatibility matrix (one PR)
 
-- The package's compatibility data (the source of `version --json`).
+- The version in `pyproject.toml`, and `uv lock` (the lock records it; CI runs `uv sync --locked`).
+- The package's compatibility data (`compat.py`, the source of `version --json`).
 - The table in `README.md`: one row per tool release, with the snapshotted `schema_version`s, what the fixed specs
   list, and the table-spec versions it writes.
-- `CHANGELOG.md`: the version, date, accepted `schema_version`s, table-spec version, and every change.
+- `CHANGELOG.md`: a `## X.Y.Z (YYYY-MM-DD)` heading (`release.yml` copies the section under it into the GitHub Release),
+  the date, accepted `schema_version`s, table-spec version, and every change, including what was under `## Unreleased`.
+- The design plan's matrix (§9.2) and the README's install pins and status line.
 - Merge only with the user's OK.
 
 ## 4. Tag and publish (after the user's OK)
 
-- Tag the merge commit on `main` (tag format: see design plan §9.3) and push the tag.
+- Before the first release from the renamed repository (`clingen-data-model/gkm-bundle-parquet`, ADR 0009), the PyPI
+  project's trusted publisher must name that repository and `release.yml`; the maintainer changes it on PyPI.
+- Tag the merge commit on `main` as `vX.Y.Z` (`release.yml` checks it against the package version) and push the tag.
 - The release workflow builds the sdist and wheel and publishes them (PyPI via trusted publishing, plus a
   GitHub Release with the changelog entry). Check that the published version installs in a clean environment
   and that `clinvar-gkm-parquet version --json` reports the expected matrix.
