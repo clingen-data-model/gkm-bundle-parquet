@@ -5,6 +5,79 @@ All notable changes to this tool. Each release states the table-spec versions it
 
 ## Unreleased
 
+## 2.0.0 (2026-11-16)
+
+The first release as `gkm-bundle-parquet` (ADR 0009), and the one that removes what 1.1.0 deprecated (ADR 0008, ADR 0009).
+The tool names no producer and has no default bundle: every run takes one bundle and its pairing. Writes table spec
+`sections` 1.0 (`draft`) only, compiled from the pairing; pins DuckDB 1.5.4. `version --json` lists no producer's
+`schema_version`s.
+
+The output doesn't change otherwise: on the real ClinVar-GKM 1.1.0 excerpt with its 1.1.0 pairing, `table-spec.json` is
+byte-identical to 1.1.0's, and every Parquet file differs from 1.1.0's only in the key-value prefix and `tool_version`;
+the manifest's `builder` names the new tool.
+
+**Breaking changes**
+
+- **Renamed** (ADR 0009 decision 3): the PyPI project and console script are `gkm-bundle-parquet`, the package
+  `gkm_bundle_parquet`. The cache directory is `$XDG_CACHE_HOME/gkm-bundle-parquet/` and the User-Agent
+  `gkm-bundle-parquet/<version>`. Every key-value entry a build writes has the prefix `gkm_bundle_parquet.` (was
+  `clinvar_gkm_parquet.`); `verify` and `rebuild` read both, so `sections` sets built by 1.x still check and rebuild
+  (`tests/fixtures/sets-1.1.0/`).
+- **The release model is removed** (ADR 0009 decision 2): `--release`, `--index`, `--delta`, `--manifest` and
+  `--full-source-release` (on `build`, `select`, `verify` and `validate`), and the line index, delta replay and the delta
+  manifest code behind them. Pass one bundle with `--full <path|url>`, with `--sha256 <hex>` or a `<file>.sha256` sidecar.
+- **No default bundle** (ADR 0009 decision 1): `build`, `select` and `compile-spec` need `--bundle-schema` and
+  `--column-set`, and `validate` needs `--bundle-schema`; without them each stops with exit 2 and says so.
+  `compile-spec <schema_version>` is removed. The package no longer ships ClinVar-GKM's 1.1.0 schema snapshot
+  (`schemas/1.1.0/`), its column set (`spec/sections/column-sets/1.1.0.columns.yaml`) or `default-bundle.yaml`; the first
+  two are now test fixtures (`tests/fixtures/clinvar-gkm/1.1.0/`).
+- **The fixed specs and the oracle are removed** (ADR 0008 decision 2): `--spec` (and with it `--spec baseline`,
+  `--spec clinvar-gkm`, `clinvar-gkm-1.0`, `clinvar-gkm@1.0`, `--spec sections` and a `tables.yaml` as `--spec`), the
+  `baseline` and `clinvar-gkm` specs with their SQL, and `verify --against`. `verify` and `rebuild` refuse a set 1.x built
+  with one of them (or from deltas), naming the spec: check it with the 1.x tool that wrote it.
+- **`validate` has no default version property** (ADR 0009, "the root"): 1.x used `schema_version` unless the given
+  schema's root didn't declare it. Pass `--version-property schema_version` for ClinVar-GKM bundles to validate each record
+  with the bundle's version, as before. Without it, a version at the root is validated as a root value.
+- **Manifest** (`manifest.json`):
+  - `builder` is `gkm-bundle-parquet <version>`, and `note` names the bundle (one), not "the ClinVar-GKM JSON bundle(s)";
+  - `source_release` and `release` are always `null` (the tool doesn't know which release a file is; a producer that
+    publishes the manifest fills them);
+  - `source_deltas` and `inputs.deltas` are removed;
+  - `inputs.full` loses `release` and `source_release`.
+- **Key-value metadata:** the entries are unchanged but for the prefix. `source_deltas` is always `[]` and `source_release`
+  always empty, kept so the entries stay the same.
+- `version --json`: `table_spec` (new) names the one spec and `table_spec_version` is its rules version; `table_specs`,
+  `default_table_spec`, `snapshotted_schema_versions`, `tables` and `table_spec_status`, which described the built-in specs,
+  are removed; `kv_prefix` and `reads_kv_prefixes` are new. `version` prints one line for the spec.
+
+**Other changes**
+
+- `verify` takes an optional pairing (`--bundle-schema` with `--column-set`) and checks that it compiles to the spec that
+  wrote the files: the three hashes every file records (for a bundle the general reader normalized, the key-sorted form
+  matches too). A difference is a problem (exit 1); one flag without the other is a usage error (exit 2).
+- `verify --roundtrip --work-dir <dir>` creates the directory when it doesn't exist (1.1.0 failed).
+- The producer-freedom check covers the whole package, every module and `sql/_macros.sql`: no module names a producer, its
+  sections or its URLs. Three macros only the removed specs' SQL used are removed.
+- Scripts: `bench-tables.py`, `capture-spec.py`, `make-baseline-spec.py`, `render-spec-readme.py` and
+  `extract-fixtures.py` (ClinVar-GKM-specific; the fixtures' provenance names it, so run it from the 1.1.0 source) are
+  removed. `sample-bundle.py` takes `--bundle-schema` and `--version-property`; `validate-equivalence.py` takes
+  `--version-property` instead of `--index`; `bench-scale.py` has no `--deltas`.
+
+**Migration**
+
+| 1.x | 2.0.0 |
+| --- | --- |
+| `clinvar-gkm-parquet ...` | `gkm-bundle-parquet ...` (`uvx gkm-bundle-parquet@2.0.0`) |
+| `--release R` / `--index I` | resolve the release yourself; `--full <url> --sha256 <hex>` (or its `.sha256` sidecar) |
+| `--delta D --manifest M` (replay) | build the bundle you want to read; the tool reads one |
+| `build --full F` (the default ClinVar-GKM pairing) | `build --full F --bundle-schema S --column-set C` |
+| `compile-spec 1.1.0` | `compile-spec --bundle-schema S --column-set C` |
+| `validate F` | `validate F --bundle-schema S --version-property schema_version` |
+| `--spec baseline`, `--spec clinvar-gkm`, `--spec my.yaml` | the `sections` spec of a pairing; a column set for other tables |
+| `verify --spec ...` | `verify` reads the spec the build wrote; optionally `--bundle-schema S --column-set C` |
+| `verify --against DIR` | `verify --bundle-recompute` and `verify --roundtrip` |
+| KV prefix `clinvar_gkm_parquet.` | `gkm_bundle_parquet.` (both read by `verify` and `rebuild`) |
+
 ## 1.1.0 (2026-11-16)
 
 The last release under the name `clinvar-gkm-parquet` (ADR 0009 decision 3): it deprecates what 2.0.0 removes. Reads and
