@@ -34,7 +34,7 @@ its schema and column set, and says which of its versions they read.
 | 1.0.0 | any bundle with its pairing; ClinVar-GKM by default (snapshot: 1.1.0); `baseline`, `clinvar-gkm`: ClinVar-GKM 1.1.0 | `sections` 1.0 (default; draft), `baseline` 1.0 (draft), `clinvar-gkm` 1.0 (draft) |
 | 1.0.1 | as 1.0.0 | as 1.0.0 |
 | 1.1.0 | as 1.0.0; the default bundle, `baseline` and `clinvar-gkm` deprecated | as 1.0.0 |
-| 2.0.0 (planned) | any bundle with its pairing (required); no default bundle | `sections` 1.0 (draft) |
+| 2.0.0 (planned) | any bundle with its pairing (required); no default bundle | `sections` 2.0 (draft; no `key_order`, a record-identical round trip) |
 
 `sections`: one table per bundle collection (20 in ClinVar-GKM 1.1.0), keyed by `id`, compiled from a bundle schema and its
 column set, with every record property its own typed column (named as the property; pointers as bare ids; extensions in
@@ -43,8 +43,10 @@ doesn't cover stops the build. It is lossless
 ([ADR 0005](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0005-lossless-sections-build.md)):
 each table also has `ordinal` (the record's position in its section) and, for a pointer with several target sections,
 `<column>_section`, and root values that aren't collections go in a `root_values` table. The build checks every row.
-`rebuild` writes back a bundle in the line layout byte for byte; any other layout JSON-equal, in the canonical line layout.
-The manifest says which.
+`rebuild` writes back a bundle whose records are identical to the source's: the same canonical form (RFC 8785 with arrays
+sorted), whatever the source's layout, key order or array order ([docs/round-trip.md](docs/round-trip.md)). This is
+2.0.0's promise (planned; on `main`); 1.x rebuilds a line-layout bundle's text byte for byte and any other layout
+JSON-equal.
 
 `version --json` gives the same: `tool_version`, `table_spec`, `table_spec_version`, `schema_version_rule`, the key-value
 prefix it writes (`kv_prefix`), the DuckDB version and `validate`'s engines.
@@ -52,7 +54,7 @@ prefix it writes (`kv_prefix`), the DuckDB version and `validate`'s engines.
 Each Parquet file records, in its key-value metadata (prefix `clinvar_gkm_parquet.`, `gkm_bundle_parquet.` after the
 rename), the tool version, the spec's name and
 version, the sha256 of the schema set, the column set and the compiled spec, the source bundle's sha256, for a lossless
-build the sha256 of its section's text and, for a selective build, the selection
+build its section's records sha256 and, for a selective build, the selection
 ([design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md#72-key-value-metadata-every-file)
 §7.2). A set also holds its compiled spec (`table-spec.json`), so `verify` and `rebuild` need neither the schema nor the
 column set. They also read sets built by 1.x with `sections`.
@@ -103,7 +105,7 @@ clinvar-gkm-parquet build --full civic-assertion-bundle.json \
 # The columns a pairing gives, with no build
 clinvar-gkm-parquet compile-spec $P > sections.yaml
 
-# Back from Parquet to the bundle: a full build rebuilds the bundle's text byte for byte (no schema needed)
+# Back from Parquet to the bundle: a full build rebuilds the bundle's records (no schema needed)
 clinvar-gkm-parquet rebuild out/ -o clinvar-gkm_2026-1018.json.gz
 
 # Validate every record against the bundle's JSON Schema set (the default engine, jsonschema-rs; docs/validate.md)
@@ -114,7 +116,7 @@ clinvar-gkm-parquet validate clinvar-gkm-delta_2026-1031.json.gz --bundle-schema
     --version-property schema_version --engine python
 
 # Checks: the directory on its own; a full build against its bundle; a selection against its mini-bundle;
-# the round trip (the rebuilt text against the recorded hashes and, with --full, the bundle's own text)
+# the round trip (the rebuilt records against the recorded records sha256s and, with --full, the bundle's own)
 clinvar-gkm-parquet verify out/
 clinvar-gkm-parquet verify out/ --bundle-recompute --full clinvar-gkm_2026-1018.json.gz $P
 clinvar-gkm-parquet verify omim/ --bundle-recompute --full omim.json.gz
@@ -141,9 +143,12 @@ record of the ClinVar-GKM 2026-10-31 delta and a sample of the 2026-10-31 full, 
 ClinVar-GKM's narrowed ones, and on the two CIViC bundles;
 [docs/validate.md](docs/validate.md) has the evidence, the known differences and the timings.
 
-`rebuild` writes gzip when the output name ends in `.gz`; the gzip bytes differ from the published file (header
-and compressor), the uncompressed text does not, and its sha256 is checked against the build's manifest
-(`source_text_sha256`) and each file's `section_text_sha256`. It refuses anything it can't reproduce exactly:
+From 2.0.0 (planned; on `main`), `rebuild` writes the line layout, gzip when the output name ends in `.gz`. The text
+need not be the source's (keys come in column order, spacing is the tool's, and array order is not promised); the
+records are, and that is checked: each record's canonical form is hashed, and the records sha256s are compared with each
+file's `section_records_sha256` and the manifest's `records_sha256` ([docs/round-trip.md](docs/round-trip.md) defines
+them). A set built by tool 1.x recorded text sha256s instead: it rebuilds unchecked, and `verify --roundtrip` needs
+`--full <bundle>` for it. `rebuild` refuses anything it can't reproduce:
 a selection, a build with `--tables` (or, by 1.x, with deltas), a missing table, manifest or ordinal, a pointer outside its
 targets ([ADR 0005](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0005-lossless-sections-build.md)).
 
@@ -158,10 +163,13 @@ and the [design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/b
 
 ## Migrating from 1.x
 
-2.0.0 removes what 1.1.0 deprecated. The output of a `sections` build with a pairing doesn't change, except for the
+2.0.0 removes what 1.1.0 deprecated. The values of a `sections` build with a pairing don't change. What does: the
 key-value prefix (`gkm_bundle_parquet.` for `clinvar_gkm_parquet.`), the `tool_version` entry, the manifest's `builder`
-and, where 1.1.0 read a release from an option or a published file name, the `source_release` entry, now always empty (see
-the [changelog](CHANGELOG.md) for the manifest fields).
+and, where 1.1.0 read a release from an option or a published file name, the `source_release` entry, now always empty;
+and, with the record-identical round trip ([docs/round-trip.md](docs/round-trip.md)), the table spec version (`sections`
+2.0), the column order of the tables a column set's `key_order` named (now schema order, as every other table), and the
+recorded sha256s (`section_records_sha256` and `records_sha256` for the text sha256s). See the
+[changelog](CHANGELOG.md) for the manifest fields.
 
 | 1.x | 2.0.0 |
 | --- | --- |
@@ -173,9 +181,12 @@ the [changelog](CHANGELOG.md) for the manifest fields).
 | `verify --spec` | nothing: `verify` reads the spec the build wrote beside its manifest |
 | `verify --against` (the oracle comparison) | `verify --bundle-recompute` and `verify --roundtrip` |
 | `validate` with the version property `schema_version` by default | `--version-property schema_version` |
+| `key_order` (and `sorted_columns`) in a column set | delete it: key order doesn't count, and a column set with it is refused |
+| a byte-identical rebuilt text, checked by `source_text_sha256` and `section_text_sha256` | record-identical records, checked by `records_sha256` and `section_records_sha256` |
 
-`verify` and `rebuild` still read `sections` sets built by 1.x. Sets built by 1.x with `baseline`, `clinvar-gkm`, a custom
-spec or from deltas are refused: check them with the 1.x tool that wrote them.
+`verify` and `rebuild` still read `sections` sets built by 1.x. Such a set records no records sha256, so `rebuild` writes it
+back unchecked and `verify --roundtrip` needs `--full <bundle>` for it; build it again to record one. Sets built by 1.x
+with `baseline`, `clinvar-gkm`, a custom spec or from deltas are refused: check them with the 1.x tool that wrote them.
 
 ## Design records
 

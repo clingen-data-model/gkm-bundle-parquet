@@ -6,18 +6,49 @@ All notable changes to this tool. Each release states the table-spec versions it
 ## Unreleased
 
 For 2.0.0. The removals of what 1.1.0 deprecated (ADR 0008, ADR 0009, plan Phase 3 step 3): the tool names no producer
-and has no default bundle, and every run takes one bundle and its pairing. It writes table spec `sections` 1.0 (`draft`)
+and has no default bundle, and every run takes one bundle and its pairing. It writes table spec `sections` 2.0 (`draft`)
 only, compiled from the pairing, and pins DuckDB 1.5.4; `version --json` lists no producer's `schema_version`s. The
 rename to `gkm-bundle-parquet` comes later, as the last step before 2.0.0: until then the package, the command, the
 key-value prefix, the cache directory and the User-Agent keep the name `clinvar-gkm-parquet`.
 
-The output doesn't change otherwise. With the ClinVar-GKM 1.1.0 pairing, on the real excerpt, the CIViC fixture, a
-selection and the 2026-10-31 delta (the newest published), `table-spec.json`, the mini-bundles, `compile-spec` and the
-rebuilt bundles are byte-identical to 1.1.0's, and so is every Parquet file but for the `tool_version` entry and, for a
-file whose name 1.1.0 read a release from, `source_release` (below).
+The removals alone don't change the output otherwise. With the ClinVar-GKM 1.1.0 pairing, on the real excerpt, the CIViC
+fixture, a selection and the 2026-10-31 delta (the newest published), `table-spec.json`, the mini-bundles, `compile-spec`
+and the rebuilt bundles were byte-identical to 1.1.0's, and so was every Parquet file but for the `tool_version` entry
+and, for a file whose name 1.1.0 read a release from, `source_release` (below). The record-identical round trip (ADR 0008
+decisions 1.2 and 1.3, the first breaking change below) then changes the recorded sha256s, the rebuilt text, the table
+spec version and the column order of the tables 1.1.0's column set listed under `key_order`; the values don't change.
 
 **Breaking changes**
 
+- **The round trip is record-identical, not byte-identical** (ADR 0008 decisions 1.2 and 1.3;
+  [docs/round-trip.md](docs/round-trip.md)). A rebuilt record must have the same canonical form as its source record:
+  RFC 8785 (JCS) with every array sorted by its elements' canonical UTF-8 bytes (a multiset), numbers by their IEEE-754
+  double value, strings by their decoded text (no Unicode normalization). Key order, array order, whitespace, escapes
+  and number spelling no longer count, for any source layout; a changed value still does. The build's row check
+  compares each row's record sha256 with its source record's; `rebuild` and `verify --roundtrip` compare records
+  sha256s, not text sha256s.
+  - Recorded: each file's `clinvar_gkm_parquet.section_records_sha256` (the sha256 of the sorted lines `<key> TAB
+    <record sha256>`) and the manifest's `records_sha256` (the sha256 of the sorted lines `<section> TAB <section
+    records sha256>` plus `$ TAB <root sha256>`). Removed: `section_text_sha256`, `source_text_sha256` and
+    `source_text_size`. The manifest's `round_trip.promise` is `record-identical` for every layout.
+  - `rebuild` writes the line layout with keys in column order and records in source order; it prints the records
+    sha256 instead of a text sha256.
+  - `key_order` and `sorted_columns` are gone: a column set with `key_order` is refused, naming the fix; columns are in
+    schema order in every table, so a bundle the general reader normalizes compiles to the same spec as one in the
+    line layout. The `sections` spec is now **2.0** (a major change: the 7 tables that had `key_order: columns` in the
+    1.1.0 pairing reorder their columns, so a reader by column position sees a new table; by name, nothing changes).
+    The other columns, types and values are unchanged. The 1.1.0 column set (`tests/fixtures/clinvar-gkm/1.1.0/`) loses
+    its `key_order` block, so its sha256 (`column_set_sha256`) changes.
+  - **Sets built by tool 1.x** (they record `section_text_sha256` and no `section_records_sha256`): still read. Their
+    `table-spec.json` keeps `key_order`, which is ignored. `rebuild` writes them back and says the result is not checked
+    (nothing is recorded to check it against; the text sha256s are not compared, since the text is laid out by 2.0.0's
+    rules); `verify --roundtrip` refuses them unless `--full <bundle>` is given, which compares their records with the
+    bundle's. Rebuild such a set with 2.0.0 to record its records sha256.
+  - Measured 2026-11-16 on the 2026-10-31 delta (495,547 records, 17 sections), on a shared machine (load average
+    about 4), so the timings are rough: build 19 s against 12 s for the removals alone (about 1.6x: the row check
+    canonicalizes every record and row in Python), `rebuild` 11 s against 10 s, `verify --roundtrip --full` 14 s. The
+    records sha256 matched an independent recomputation (stdlib json and hashlib) of the source, the rebuilt
+    bundle and the manifest, and two builds gave byte-identical files. The cost on a full release is not measured.
 - **The release model is removed** (ADR 0009 decision 2): `--release`, `--index`, `--delta`, `--manifest` and
   `--full-source-release` (on `build`, `select`, `verify` and `validate`), and the line index, aliases, delta replay
   (`replay.py`), `ChainError` and the delta-manifest code behind them. Pass one bundle with `--full <path|url>`, with
@@ -69,8 +100,7 @@ file whose name 1.1.0 read a release from, `source_release` (below).
   buffers and left too little for the rest of the process on a 32 GB machine (the 2026-11-06 oracle run). When no size is
   known, DuckDB keeps its own default. The limit doesn't change the files' bytes.
 - `verify` takes an optional pairing (`--bundle-schema` with `--column-set`) and checks that it compiles to the spec that
-  wrote the files: the three hashes every file records (for a bundle the general reader normalized, the key-sorted form
-  matches too). A difference is a problem (exit 1); one flag without the other is a usage error (exit 2).
+  wrote the files: the three hashes every file records. A difference is a problem (exit 1); one flag without the other is a usage error (exit 2).
 - `verify --roundtrip --work-dir <dir>` creates the directory when it doesn't exist (1.1.0 failed).
 - The producer-freedom check covers the whole package, every module and `sql/_macros.sql`: no module names a producer, its
   sections or its URLs. Three macros only the removed specs' SQL used are removed. The package description no longer
@@ -99,6 +129,8 @@ file whose name 1.1.0 read a release from, `source_release` (below).
 | `verify --spec ...` | `verify` reads the spec the build wrote; optionally `--bundle-schema S --column-set C` |
 | `verify --against DIR` | `verify --bundle-recompute` and `verify --roundtrip` |
 | the ClinVar-GKM 1.1.0 schema snapshot and column set in the package | ClinVar-GKM's own published pairing (or `tests/fixtures/clinvar-gkm/1.1.0/` in a source tree) |
+| `key_order` (and `sorted_columns`) in a column set | delete it: key order doesn't count, and a column set with it is refused |
+| `source_text_sha256`, `section_text_sha256` (byte-identical text) | `records_sha256`, `section_records_sha256` (record-identical records; docs/round-trip.md) |
 
 ## 1.1.0 (2026-11-16)
 

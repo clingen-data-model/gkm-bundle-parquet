@@ -31,7 +31,6 @@ sections:
 | `sections` | yes | One entry per collection of the bundle: its properties, as shapes (below). |
 | `version_property` | no | The root property that holds the bundle's version, if it has one. There is no default name. |
 | `collections` | no | Root properties that are collections, only where the schema can't say. |
-| `key_order` | no | Tables whose line-layout bundle text isn't key-sorted. Default: every key sorted. |
 
 **What is a collection.** A root property of the schema is a collection when it has `patternProperties`, or
 `additionalProperties` holding a schema. It is one table, named as the property. Any other root property is a root value
@@ -84,31 +83,26 @@ The compile stops, naming the section and position, on:
 - a position it can't resolve with no shape: an open object, a union of scalars, a string-or-object, an integer-or-Range
   inside a value, a map;
 - a class that reaches itself, when you list it all the way down: narrow around it;
-- a pointer naming something that is not a collection; a `sorted_columns` entry that is not a column; a key written twice.
+- a pointer naming something that is not a collection; a key written twice;
+- `key_order`, which tool 1.x read and 2.0.0 refuses: remove it (below).
 
 A property you list that a bundle doesn't hold is fine: the column is NULL. A property a bundle holds that you don't list
 stops the **build**, naming the record: nothing is dropped. So a column set is only as complete as the records it has
 been run on; an empty collection's columns are your statement of what it would hold.
 
-## Key order, for line-layout bundles only
+## Key order doesn't count
 
-A bundle in the *line layout* (one record per line, `    "<key>": <record>`) is rebuilt byte for byte, so the tool has to
-know its key order. By default every key at every depth is sorted. If yours isn't, list those collections, and the
-column-set order is then the order in the text:
-
-```yaml
-key_order:
-  variant:                                 # columns and fields in the order of this file
-  gene: {sorted_columns: [extensions]}     # as above, but these columns' values are key-sorted
-```
-
-Any other layout (pretty-printed, minified) ignores this. The file bytes can't be kept, so the tool reads records with
-keys sorted, and `rebuild` writes the canonical line layout: JSON-equal to the source, not byte-identical. The manifest
-records which promise a set carries (`round_trip`).
+From tool 2.0.0 (planned; on `main`) the round trip is record-identical ([round-trip.md](round-trip.md)): a rebuilt
+record has the same canonical form as its source record, so key order, array order and layout don't count, and a column
+set says nothing about them. Columns come in schema order, then any positions the schema doesn't name (in an open
+object) in the order this file lists them.
+Tool 1.x rebuilt a line-layout bundle byte for byte and needed a `key_order` block naming the collections whose keys
+weren't sorted; 2.0.0 refuses a column set that has one, so delete the block.
 
 ## What a build checks
 
-Every row is written back as JSON from its columns and compared with the record; any difference stops the build. This is
+Every row is written back as JSON from its columns and its canonical form compared with the record's
+([round-trip.md](round-trip.md)); any difference stops the build. This is
 what makes a wrong shape loud rather than a wrong table. A JSON `null` stops it too, since a NULL column reads as absent.
 
 The general reader holds a whole bundle in memory. For a bundle too large for that, write it in the line layout, which is
