@@ -24,7 +24,7 @@ KV_PREFIXES = (KV_PREFIX, LEGACY_KV_PREFIX)
 SCHEMA_VERSION_RULE = (
     "Reads any bundle whose schema (--bundle-schema) and column set (--column-set) load and compile into the "
     "sections spec (ADR 0006, ADR 0009); no producer's schema_version is built in. verify and rebuild read the "
-    "spec a build wrote beside its manifest, and sets written by 1.x (key-value prefix clinvar_gkm_parquet.) "
+    f"spec a build wrote beside its manifest, and sets written by 1.x (key-value prefix {LEGACY_KV_PREFIX}) "
     "with the sections spec."
 )
 

@@ -14,7 +14,7 @@ Stage interfaces (each module owns its half):
 - verify.py   checks a built directory against the spec and the bundle (recompute, on the same pipeline).
 
 Staging format: gzip text, one record per line, `<key as JSON string>\\t<record>\\n`. `<record>` is the exact
-bytes from the bundle line (the trailing `,` removed), so `data` equals the bundle record byte for byte. JSON
+bytes from the bundle line (the trailing `,` removed), so it equals the bundle record byte for byte. JSON
 text never holds a raw tab or newline, so the split is unambiguous. The build writes a section as chunk files
 (`<section>.<nnnn>.tsv.gz`) holding the section's records in bundle order; each of its lines starts with
 `<ordinal>\\t`, the record's 0-based position in the section (the `ordinal` derivation kind). `stage_bundle` writes

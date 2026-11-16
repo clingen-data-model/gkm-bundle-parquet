@@ -110,7 +110,7 @@ def _parser() -> argparse.ArgumentParser:
         "also checks that they compile to that spec.",
     )
     v.add_argument("dir", type=Path)
-    v.add_argument("--bundle-recompute", action="store_true", help="id sets and data against the bundle(s)")
+    v.add_argument("--bundle-recompute", action="store_true", help="id sets and data against the bundle")
     v.add_argument(
         "--roundtrip",
         action="store_true",

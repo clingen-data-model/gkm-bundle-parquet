@@ -686,13 +686,18 @@ def test_a_manifest_that_disagrees_with_the_files_is_found(excerpt_copy, tmp_pat
     assert rc == 2 and "table_spec.column_set_sha256" in stderr
 
 
-# --- the generic path knows no producer --------------------------------------------------------------------------
+# --- the package knows no producer -------------------------------------------------------------------------------
 
-# What a move to another package takes: this path holds no producer's name or URL, and imports nothing that does.
+# What a move of the core to another package takes: it imports nothing outside itself (ADR 0006).
 CORE = ("compiler", "schemas", "columnset", "bundle", "transport", "errors", "model")
-# The one neutral thing the scan allows: the tool's own distribution name, in one constant.
-ALLOWED_LINES = {("transport", 'TOOL_NAME = "gkm-bundle-parquet"')}
-PRODUCER_WORDS = re.compile(r"clinvar|scv|vcv|\brcv\b|loc_start|civic|ncbi|clingen|bigquery", re.IGNORECASE)
+# No module and no SQL file names a producer or its URLs (ADR 0009). The neutral exceptions: the tool's own name,
+# in one constant, and the key-value prefix 1.x wrote, which verify and rebuild still read.
+ALLOWED_LINES = {
+    ("transport.py", 'TOOL_NAME = "gkm-bundle-parquet"'),
+    ("compat.py", 'LEGACY_KV_PREFIX = "clinvar_gkm_parquet."'),
+}
+PRODUCER_WORDS = re.compile(r"clinvar|scv|vcv|\brcv\b|loc_start|civic|ncbi|clingen|bigquery|omim", re.IGNORECASE)
+PACKAGE_FILES = sorted(p for p in SRC.rglob("*") if p.suffix in (".py", ".sql"))
 
 
 def _package_imports(module: str) -> set[str]:
@@ -718,10 +723,15 @@ def test_the_core_imports_only_the_core():
     assert reached == set(CORE), sorted(reached - set(CORE))
 
 
-@pytest.mark.parametrize("module", [*CORE, "compiled"])
-def test_the_core_names_no_producer(module):
+def test_the_scan_covers_the_whole_package():
+    names = {p.name for p in PACKAGE_FILES}
+    assert {f"{m}.py" for m in CORE} | {"cli.py", "build.py", "verify.py", "select.py", "_macros.sql"} <= names
+
+
+@pytest.mark.parametrize("path", PACKAGE_FILES, ids=lambda p: str(p.relative_to(SRC)))
+def test_the_package_names_no_producer(path):
     hits = []
-    for line in (SRC / f"{module}.py").read_text(encoding="utf-8").splitlines():
-        if PRODUCER_WORDS.search(line) and (module, line.strip().split("  #")[0].strip()) not in ALLOWED_LINES:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if PRODUCER_WORDS.search(line) and (path.name, line.strip().split("  #")[0].strip()) not in ALLOWED_LINES:
             hits.append(line.strip())
     assert not hits, hits

@@ -10,7 +10,7 @@ streamed with the tool's reader (bundle.py), and records are parsed and validate
 Engines:
 
 - `rs` (the default): jsonschema-rs, with a `Registry` of every other file of the set under its `$id`, and the root
-  compiled per set of names a mini-bundle holds (`_RsEngine`). Root-relative `$ref`s (`/clingen/...`) resolve
+  compiled per set of names a mini-bundle holds (`_RsEngine`). Root-relative `$ref`s (`/<path>`) resolve
   against the `$id` of the file they sit in. Its retriever refuses any URI the set doesn't hold, so nothing is
   fetched. Formats aren't validated, as with Python `jsonschema` by default.
 - `python` (the reference, the `reference` extra): the GA4GH GKM Toolkit's `validate_bundle_schema`, with a

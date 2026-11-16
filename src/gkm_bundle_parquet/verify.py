@@ -61,7 +61,7 @@ def _pq(path: Path) -> str:
 
 
 def read_kv(con: duckdb.DuckDBPyConnection, path: Path) -> dict[str, str]:
-    """The tool's key-value metadata of one file, prefix removed: gkm_bundle_parquet.*, or clinvar_gkm_parquet.* in
+    """The tool's key-value metadata of one file, prefix removed: compat.KV_PREFIX, or compat.LEGACY_KV_PREFIX in
     a file written by 1.x (compat.KV_PREFIXES)."""
     rows = con.execute(f"SELECT key, value FROM parquet_kv_metadata({sql_str(str(path))})").fetchall()
     out = {}

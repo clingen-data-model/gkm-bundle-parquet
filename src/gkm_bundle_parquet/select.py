@@ -35,8 +35,8 @@ disk holds the output plus a compressed spool of the selected records, which shr
   Records are never JSON-parsed.
 - Depth is the shortest hop count, exactly as a breadth-first search gives it. A pass may assign depth d to a
   record only when every record of depth d - 2 or less is already selected (then no shorter path can exist), so
-  a pass completes one level and part of the next. Pointers mostly point to EARLIER sections (vcv -> proposition
-  -> variation -> allele -> location -> sequenceReference), so a hop back costs about one pass.
+  a pass completes one level and part of the next. In a bundle whose pointers mostly point to EARLIER sections
+  (a statement -> its proposition -> its variant -> its location), a hop back costs about one pass.
 - Pass 1 reads the whole source: it checks the sha256 (BundleFileSource, when an expected one is known), the
   sections against the bundle's shape (its RootRules, from the pairing), the line grammar, and
   the seeds. A later pass stops at the first section after which nothing is wanted, and skips sections with nothing
