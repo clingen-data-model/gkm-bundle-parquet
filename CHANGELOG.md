@@ -5,6 +5,46 @@ All notable changes to this tool. Each release states the table-spec versions it
 
 ## Unreleased
 
+## 1.1.0 (2026-11-16)
+
+The last release under the name `clinvar-gkm-parquet` (ADR 0009 decision 3): it deprecates what 2.0.0 removes. Reads and
+writes the same as 1.0.1: bundle `schema_version` 1.1.0 snapshotted, table specs `sections` 1.0 (the default), `baseline`
+1.0 and `clinvar-gkm` 1.0, all `draft`, and DuckDB 1.5.4. The table specs don't change, and neither does the output: on
+the real 1.1.0 excerpt and the CIViC fixtures, every file of a default `sections` build (and of `baseline`, `clinvar-gkm`,
+selective and CIViC builds) is byte-identical to 1.0.1's but for the `tool_version` key-value entry, and the
+mini-bundles and a rebuilt bundle are byte-identical.
+
+- **Deprecations** (ADR 0009 decision 5, ADR 0008 decision 2), removed in 2.0.0. Each use still works as before and prints
+  one line on stderr, `clinvar-gkm-parquet: deprecated: ...`, naming the replacement; output files, exit codes and stdout
+  don't change, and there is no switch to silence them. See the README's Deprecations section.
+  - the name `clinvar-gkm-parquet`, said on every run (including `--help` and a usage error): from 2.0.0 the tool is
+    `gkm-bundle-parquet` (https://github.com/clingen-data-model/gkm-bundle-parquet), with the same commands;
+  - `--release`, `--index`, `--delta`, `--manifest` and `--full-source-release` (on `build`, `select`, `verify` and
+    `validate`): resolve the release yourself and pass one bundle with `--full` and `--sha256`, or a `<file>.sha256`
+    sidecar;
+  - `build`, `select` and `validate` without `--bundle-schema`, which read the built-in default bundle: give the bundle's
+    schema (and, for `build` and `select`, its column set);
+  - `--spec clinvar-gkm` (and `clinvar-gkm-1.0`, `clinvar-gkm@1.0`), `--spec baseline` and a `tables.yaml` as `--spec`:
+    the default `sections` spec with a pairing, and a column set for other tables;
+  - `verify --against`: `verify --bundle-recompute` and `verify --roundtrip`;
+  - `compile-spec <schema_version>`: `compile-spec --bundle-schema ... --column-set ...`.
+- **`version --json`** marks each built-in spec `deprecated` (`baseline` and `clinvar-gkm`), and `schema_version_rule`
+  says what is deprecated; `version` prints `deprecated` beside them.
+- **Selection on any pairing** (ADR 0008 decision 4.1, ADR 0009 decision 5): `select` takes `--bundle-schema` and
+  `--column-set`, and `build --driver` now accepts them (it refused them). With a pairing, the selection reads the root by
+  the pairing's rules instead of a fixed `schema_version` line and the default bundle's sections: the version property is
+  the column set's (none, or optional), and the mini-bundle writes it only when the source has one; an empty collection
+  (`"x": {}`) is read; a root value that isn't a collection is kept in the mini-bundle, verbatim, after its sections; and a
+  bundle in another JSON layout is read whole, as the canonical line layout (its records key-sorted), with the file's
+  sha256. A pairing with `--delta` is refused. Without a pairing, the mini-bundles are byte-identical and a bundle not in
+  the line layout is still refused; the selection's reader now reads an empty collection line, as the build's already did,
+  and names a root value it can't place as an unknown section. Selection follows `#/<section>/<key>` pointers as before, so a pointer
+  into part of a record (CIViC's `#/variant/<key>/protein/<id>`) is reported as dangling.
+- **`validate` with no version** (ADR 0009 decision 5): when `--bundle-schema` is given, `--version-property` isn't, and the
+  schema's root declares no `schema_version`, the bundle is validated with no version instead of stopping (exit 2, "no
+  schema_version"); `version: (none)` is printed. Without `--bundle-schema`, nothing changes. On the CIViC fixtures it now
+  runs, and every record fails on exactly one thing: CIViC's root `required` lists all 19 of its root properties, and a
+  record is checked alone, as a one-section bundle (docs/validate.md).
 - **`validate`:** checks every record of a bundle against its JSON Schema set, each as a one-section bundle with the
   bundle's version, as ClinVar-GKM's `validate-bundle.py` does. Engine `rs` (the default) runs on jsonschema-rs 0.61.1, a
   new pinned dependency; engine `python` is the GA4GH GKM Toolkit's `validate_bundle_schema` (`ga4gh.gkm` 0.4.0, the new
