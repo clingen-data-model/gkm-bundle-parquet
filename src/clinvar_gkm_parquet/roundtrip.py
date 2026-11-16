@@ -9,7 +9,7 @@ expression over the table's columns. It serves twice:
   the build stops naming the key and the first differing character. So a record the columns can't reproduce
   (a JSON null, a float, a key order the layout doesn't state, an escape the writer doesn't make) never makes it
   into a lossless build.
-- `rebuild`: a full build of a `lossless` spec (the default, sections) back to the bundle's uncompressed text,
+- `rebuild`: a full build of a `lossless` spec (sections) back to the bundle's uncompressed text,
   section by section in the bundle schema's order, records in `ordinal` order, in the assembler's layout
   (bundle.py). Each section's record lines are hashed as they are written and compared with the file's
   `section_text_sha256`; the whole text with the manifest's `source_text_sha256`. Anything else stops it: a
@@ -43,9 +43,7 @@ from pathlib import Path
 import duckdb
 
 from .bundle import JSON_LAYOUT, ROOT_VALUES_TABLE
-from .default_pairing import sections_of
-from .default_pairing import version_property as default_version_property
-from .errors import RoundTripError, SchemaSetError, SpecError
+from .errors import RoundTripError, SpecError
 from .spec import RANGE_KINDS, Column, Spec, Table
 
 RECORD_COLUMN = "__record"  # the bundle record, carried by a json table's SQL for the check
@@ -318,15 +316,10 @@ def lossless_problems(spec: Spec) -> list[str]:
                 out.append(f"table {t.name}: column name {c.name} is reserved for the round-trip check")
     if not spec.lossless:
         return out
-    for v in spec.bundle_schema_versions if spec.root is None else ():
-        want = sections_of(v)
-        have = [s for t in spec.tables for s in t.sections]
-        if sorted(have) != sorted(want) or len(have) != len(spec.tables):
-            out.append(
-                f"lossless: the tables must read each section of bundle schema {v} once, one section a table "
-                f"(missing: {sorted(set(want) - set(have))}, extra or repeated: "
-                f"{sorted(s for s in set(have) if have.count(s) > 1 or s not in want)})"
-            )
+    have = [s for t in spec.tables for s in t.sections]
+    repeated = sorted({s for s in have if have.count(s) > 1})
+    if repeated or len(have) != len(spec.tables):
+        out.append(f"lossless: the tables must read one section each, each section once (repeated: {repeated})")
     for t in spec.tables:
         tw = f"lossless: table {t.name}"
         if t.json is None:
@@ -418,7 +411,6 @@ def rebuild(
     out_dir: Path,
     out: Path | None = None,
     *,
-    spec_arg: str | None = None,
     memory_limit: str | None = None,
     threads: int | None = None,
     work_dir: Path | None = None,
@@ -438,14 +430,14 @@ def rebuild(
         raise RoundTripError(f"{out_dir}: not a directory")
     meta = duckdb.connect()
     try:
-        spec = spec_for_dir(meta, out_dir, spec_arg)
+        spec = spec_for_dir(meta, out_dir)
         kvs = dir_kv(meta, out_dir)
     finally:
         meta.close()
     if not spec.lossless:
         raise RoundTripError(
             f"{out_dir}: written by table spec {spec.label}, which is not a lossless encoding of the bundle "
-            "(lossless: true); only a full build of such a spec (the default, sections) can be rebuilt"
+            "(lossless: true); only a full build of such a spec (sections) can be rebuilt"
         )
     files = {name[: -len(".parquet")]: out_dir / name for name in kvs}
     root_values_file = files.pop(ROOT_VALUES_TABLE, None)
@@ -473,13 +465,7 @@ def rebuild(
     version = _shared_kv(kvs, "bundle_schema_version")
     if spec.bundle_schema_versions and version not in spec.bundle_schema_versions:
         raise RoundTripError(f"{out_dir}: bundle_schema_version {version} is not one spec {spec.label} reads")
-    if spec.root is not None:
-        sections = tuple(s for t in spec.tables for s in t.sections)
-    else:
-        try:
-            sections = sections_of(version)
-        except SchemaSetError as e:
-            raise RoundTripError(f"{out_dir}: bundle_schema_version {version}: {e}") from e
+    sections = tuple(s for t in spec.tables for s in t.sections)
     manifest_path = out_dir / MANIFEST_NAME
     if not manifest_path.exists():
         raise RoundTripError(
@@ -517,6 +503,8 @@ def rebuild(
         if out.exists():
             raise RoundTripError(f"{out}: already exists")
         tmp = out.with_name(f".{out.name}.{os.getpid()}.partial")
+    if work_dir is not None:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)  # as the bundle recompute makes it
     spill = Path(tempfile.mkdtemp(prefix="clinvar-gkm-parquet-rebuild-", dir=work_dir))
     con = duckdb.connect()
     try:
@@ -535,7 +523,7 @@ def rebuild(
             )
         want = {s: kvs[files[by_section[s].name].name]["section_text_sha256"] for s in present}
         values = _root_values(con, root_values_file)
-        version_property = spec.root.version_property if spec.root is not None else default_version_property()
+        version_property = spec.root.version_property
         members = []
         for member in root_order:
             if member == version_property:
@@ -695,7 +683,6 @@ def verify_roundtrip(
     *,
     full: str | None = None,
     sha256: str | None = None,
-    spec_arg: str | None = None,
     memory_limit: str | None = None,
     threads: int | None = None,
     work_dir: Path | None = None,
@@ -710,9 +697,7 @@ def verify_roundtrip(
     out: dict = {"passed": False, "problems": [], "checked": [], "text_sha256": None, "text_size": None}
     out["promise"] = None
     try:
-        r = rebuild(
-            out_dir, None, spec_arg=spec_arg, memory_limit=memory_limit, threads=threads, work_dir=work_dir
-        )
+        r = rebuild(out_dir, None, memory_limit=memory_limit, threads=threads, work_dir=work_dir)
     except RoundTripMismatch as e:
         out["problems"].append(str(e))
         return out
@@ -728,7 +713,7 @@ def verify_roundtrip(
         inp = sources.resolve_input(full, sha256=sha256)
         con = duckdb.connect()
         try:
-            spec = spec_for_dir(con, Path(out_dir), spec_arg)
+            spec = spec_for_dir(con, Path(out_dir))
         finally:
             con.close()
         streamed = bundle.stream_bundle(inp, _TextSink(), reader_rules(spec), text_digests=True)
@@ -754,7 +739,6 @@ def run_rebuild_command(args) -> int:
     result = rebuild(
         args.dir,
         args.out,
-        spec_arg=args.spec,
         memory_limit=args.memory_limit,
         threads=args.threads,
         work_dir=args.work_dir,

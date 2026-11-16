@@ -1,9 +1,9 @@
 """The compatibility data: what this tool release reads and writes. The source of `version --json`.
 
-Keep in sync with the matrix in README.md (ADR 0002, amended by ADR 0003 and ADR 0006; the release-tool skill
-updates both). A bundle schema_version has no fixed list here: `sections` compiles any bundle with its schema and
-column set (ADR 0006), `baseline`, `clinvar-gkm` and a custom spec read the versions their tables.yaml lists. This
-module holds data only; it imports the spec loader lazily, because spec.py reads these constants.
+Keep in sync with the matrix in README.md (ADR 0002, amended by ADR 0003, ADR 0006 and ADR 0009; the release-tool
+skill updates both). No producer's schema_version is listed: the one table spec, `sections`, is compiled from the
+bundle's schema and its column set, so the tool reads any bundle whose schema and column set load and compile
+(ADR 0009, row 0002).
 """
 
 from __future__ import annotations
@@ -13,31 +13,16 @@ import duckdb
 from . import __version__
 from .compiler import RULES_VERSION, SPEC_NAME
 
-# The built-in table specs (ADR 0003): name -> the one version of it this release writes.
-BUILTIN_SPECS: dict[str, str] = {
-    SPEC_NAME: RULES_VERSION,
-    "baseline": "1.0",
-    "clinvar-gkm": "1.0",
-}
-COMPILED_SPEC = SPEC_NAME  # compiled from a schema and its column set, not read from a tables.yaml (ADR 0006)
-DEFAULT_SPEC = "sections"  # what a build writes when no --spec is given (ADR 0003; baseline until 2026-10-29)
+# The one table spec (ADR 0006): compiled from a bundle schema and its column set, not read from a file.
+COMPILED_SPEC = SPEC_NAME
 KV_PREFIX = (
     "clinvar_gkm_parquet."  # of every key-value entry a build writes; a rename here changes the files' bytes
 )
-PUBLISHED_SPEC = "clinvar-gkm"  # the spec of ClinVar-GKM's published set; its release and the oracle name it
-# Deprecated in 1.1.0 and removed in 2.0.0 (ADR 0008 decision 2), as is reading the default bundle (ADR 0009).
-DEPRECATED_SPECS = ("baseline", "clinvar-gkm")
-# The version of the clinvar-gkm spec. Kept under this name for build.py, verify.py and version --json, which
-# read it as "the" table-spec version from before specs had names.
-TABLE_SPEC_VERSION = BUILTIN_SPECS[PUBLISHED_SPEC]
-
 
 SCHEMA_VERSION_RULE = (
-    "sections compiles any bundle from its schema and column set (ADR 0006). With neither given, it reads the "
-    "default bundle's: the versions in snapshotted_schema_versions work offline, and any other whose schema and "
-    "column set are published is fetched once and cached. Every other spec reads the bundle_schema_versions it "
-    "lists. Deprecated, and removed in 2.0.0: reading a bundle without its schema (the default bundle), the "
-    "baseline and clinvar-gkm specs and a tables.yaml spec."
+    "Reads any bundle whose schema (--bundle-schema) and column set (--column-set) load and compile into the "
+    "sections spec (ADR 0006, ADR 0009); no producer's schema_version is built in. verify and rebuild read the "
+    "spec a build wrote beside its manifest."
 )
 
 
@@ -63,47 +48,14 @@ def validate_engines() -> dict:
 
 
 def version_info() -> dict:
-    """`version --json`. The keys table_spec_version, table_spec_status and tables describe the clinvar-gkm spec,
-    as before specs had names; `table_specs` lists every built-in spec and marks the default. A compiled spec has
-    no one table set, so its entry has `tables_by_schema_version` (the snapshotted versions) instead of
-    `tables`."""
-    from .compiled import compiled_spec
-    from .default_pairing import snapshot_versions
-    from .spec import load_builtin
-
-    published = load_builtin(PUBLISHED_SPEC)
-    snapshotted = snapshot_versions()
-    specs = []
-    for name, version in BUILTIN_SPECS.items():
-        entry = {
-            "name": name,
-            "version": version,
-            "default": name == DEFAULT_SPEC,
-            "compiled": name == COMPILED_SPEC,
-            "deprecated": name in DEPRECATED_SPECS,
-        }
-        if name == COMPILED_SPEC:
-            by_version = {v: compiled_spec(v)[0] for v in snapshotted}
-            entry["status"] = next(iter(by_version.values())).status if by_version else "draft"
-            entry["bundle_schema_versions"] = snapshotted
-            entry["tables_by_schema_version"] = {
-                v: sorted(t.name for t in s.tables) for v, s in by_version.items()
-            }
-        else:
-            spec = load_builtin(name, version)
-            entry["status"] = spec.status
-            entry["bundle_schema_versions"] = list(spec.bundle_schema_versions)
-            entry["tables"] = sorted(t.name for t in spec.tables)
-        specs.append(entry)
+    """`version --json`: the tool's version, the table spec it writes and the version of the compiler's rules
+    (the spec's version), the key-value prefix it writes, DuckDB's version and validate's engines."""
     return {
         "tool_version": __version__,
-        "table_spec_version": TABLE_SPEC_VERSION,
-        "table_spec_status": published.status,
+        "table_spec": COMPILED_SPEC,
+        "table_spec_version": RULES_VERSION,
         "schema_version_rule": SCHEMA_VERSION_RULE,
-        "snapshotted_schema_versions": snapshotted,
+        "kv_prefix": KV_PREFIX,
         "duckdb_version": duckdb.__version__,
-        "tables": sorted(t.name for t in published.tables),
-        "default_table_spec": DEFAULT_SPEC,
-        "table_specs": specs,
         "validate_engines": validate_engines(),
     }

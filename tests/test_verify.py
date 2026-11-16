@@ -14,14 +14,7 @@ from clinvar_gkm_parquet.build import KV_KEYS, KV_PREFIX, build_tables
 from clinvar_gkm_parquet.cli import main
 from clinvar_gkm_parquet.model import BuildInputs
 from clinvar_gkm_parquet.sources import resolve_input
-from clinvar_gkm_parquet.verify import (
-    _json_first_diff,
-    compare_dirs,
-    recompute,
-    recompute_failed,
-    table_differences,
-    verify_dir,
-)
+from clinvar_gkm_parquet.verify import recompute, recompute_failed, verify_dir
 
 ALL = ["thing", "kv", "evA", "evB"]
 
@@ -126,94 +119,6 @@ def test_recompute_reports_missing_file(built):
     assert g["problems"] == ["not checked: evA missing"] and recompute_failed(g)
 
 
-# --- the oracle ------------------------------------------------------------------------------------------------
-
-
-def _reference(con, tool: Path, ref: Path) -> None:
-    """A reference set with one planted difference of every kind (see test_oracle_finds_each_difference)."""
-    ref.mkdir()
-    for name in ("kv", "evB"):
-        shutil.copy(tool / f"{name}.parquet", ref / f"{name}.parquet")
-    t5 = json.dumps(
-        {"info": {"b": [5, 6], "a": "a5"}, "tags": ["t5", "x"], "n": 5, "name": "thing 5", "id": "T0005"}
-    )
-    info_t = "STRUCT(a VARCHAR, b BIGINT[])"
-    con.execute(
-        f"""COPY (
-            SELECT id,
-                   CASE WHEN id = 'T0001' THEN 'renamed' ELSE name END AS name,
-                   n::INTEGER AS n,
-                   CASE WHEN id = 'T0003' THEN NULL ELSE tags END AS tags,
-                   CASE WHEN id = 'T0011' THEN {{'a': info.a, 'b': [11, 99]}}::{info_t}
-                        WHEN id = 'T0000' THEN {{'a': NULL, 'b': NULL}}::{info_t}
-                        ELSE info END AS info,
-                   CASE WHEN id = 'T0005' THEN '{t5}'
-                        WHEN id = 'T0007' THEN replace(data, 'thing 7', 'thing seven')
-                        ELSE data END AS data,
-                   'x' AS extra
-            FROM read_parquet('{tool / "thing.parquet"}') WHERE id <> 'T0009'
-            UNION ALL SELECT 'T9999', 'new', 1, []::VARCHAR[], NULL, '{{}}', 'x'
-        ) TO '{ref / "thing.parquet"}' (FORMAT parquet)"""
-    )
-    con.execute(f"COPY (SELECT 1 AS id) TO '{ref / 'zzz.parquet'}' (FORMAT parquet)")
-
-
-def test_oracle_finds_each_difference(built, tmp_path):
-    spec, con, out = built
-    ref = tmp_path / "ref"
-    _reference(con, out, ref)
-    o = compare_dirs(duckdb.connect(), out, ref, spec)
-    t = o["tables"]
-    assert t["kv"]["differences"] == [] and t["evB"]["differences"] == []
-    assert t["evA"]["differences"] == ["missing in reference"]
-    assert t["zzz"]["differences"] == ["missing in tool"]
-
-    th = t["thing"]
-    assert th["schema"]["differences"] == [
-        "column n: tool BIGINT != reference INTEGER",
-        "column extra only in reference",
-    ]
-    assert th["rows"] == {"tool": 30, "reference": 30, "equal": True}
-    assert th["ids"]["only_tool"] == {"count": 1, "samples": ["T0009"]}
-    assert th["ids"]["only_reference"] == {"count": 1, "samples": ["T9999"]}
-    assert th["ids"]["duplicates_tool"] == th["ids"]["duplicates_reference"] == 0
-    cols = th["columns"]
-    assert {c: e["distinct"] for c, e in cols.items()} == {"name": 1, "n": 0, "tags": 1, "info": 2}
-    assert cols["n"]["compared_as"] == "reference cast to BIGINT"
-    assert cols["name"]["samples"] == [{"id": "T0001", "tool": "thing 1", "reference": "renamed"}]
-    assert cols["info"]["paths"] == {"info (null)": 1, "info.b[]": 1}
-    assert [s["id"] for s in cols["info"]["samples"]] == ["T0000", "T0011"]
-    assert cols["tags"]["paths"] == {"tags (null)": 1, "tags (length)": 1, "tags[]": 1}
-    rec = th["records"]["data"]
-    assert (rec["bytes_differ"], rec["json_differ"], rec["format_only"]) == (2, 1, 1)
-    assert [s["id"] for s in rec["samples_format"]] == ["T0005"]
-    assert [(s["id"], s["path"]) for s in rec["samples_content"]] == [("T0007", "$.name")]
-    assert th["differences"] == [
-        "schema (2 difference(s))",
-        "1 id(s) only in tool",
-        "1 id(s) only in reference",
-        "name: 1 row(s) differ",
-        "tags: 1 row(s) differ",
-        "info: 2 row(s) differ",
-        "data: 2 byte difference(s) (1 content, 1 format only)",
-    ]
-
-
-def test_oracle_identical_dirs_match(built, tmp_path):
-    spec, _, out = built
-    ref = tmp_path / "ref"
-    shutil.copytree(out, ref)
-    o = compare_dirs(duckdb.connect(), out, ref, spec)
-    assert all(table_differences(t) == [] for t in o["tables"].values())
-
-
-def test_json_first_diff():
-    assert _json_first_diff({"a": 1, "b": [1, {"c": 2}]}, {"b": [1, {"c": 2}], "a": 1.0}) is None
-    assert _json_first_diff({"a": True}, {"a": 1}) == "$.a"
-    assert _json_first_diff({"a": [1]}, {"a": [1, 2]}) == "$.a (length 1 vs 2)"
-    assert _json_first_diff({"a": 1}, {"b": 1}) == "$.a"
-
-
 # --- the command -----------------------------------------------------------------------------------------------
 
 
@@ -223,7 +128,8 @@ def _vargs(d, **kw):
         bundle_recompute=False,
         full=None,
         sha256=None,
-        against=None,
+        bundle_schema=None,
+        column_set=None,
         report=None,
         work_dir=None,
         memory_limit=None,
@@ -236,24 +142,21 @@ def _vargs(d, **kw):
 @pytest.fixture
 def spec_patched(monkeypatch):
     spec = make_spec()
-    monkeypatch.setattr(verify_mod, "load_spec", lambda v: spec)
+    monkeypatch.setattr(verify_mod, "spec_for_dir", lambda con, out_dir: spec)
     return spec
 
 
 def test_command_exit_codes_and_report(built, tmp_path, spec_patched, capsys):
     _, con, out = built
-    same = tmp_path / "same"
-    shutil.copytree(out, same)
-    assert verify_mod.run_verify_command(_vargs(out, against=same)) == 0
-    ref = tmp_path / "ref"
-    _reference(con, out, ref)
-    report = tmp_path / "rep" / "oracle.md"
-    assert verify_mod.run_verify_command(_vargs(out, against=ref, report=report, work_dir=tmp_path)) == 1
+    assert verify_mod.run_verify_command(_vargs(out)) == 0
+    _rewrite(con, out / "thing.parquet", "SELECT * EXCLUDE (n) FROM src", kv=KV | {"table": "thing"})
+    report = tmp_path / "rep" / "verify.md"
+    assert verify_mod.run_verify_command(_vargs(out, report=report)) == 1
     md = report.read_text()
-    assert "Result: **differences**" in md and "`info.b[]`: 1" in md and "| kv | match |" in md
+    assert "Result: **differences**" in md and "thing: schema:" in md
     js = json.loads(report.with_suffix(".json").read_text())
-    assert js["passed"] is False and js["oracle"]["tables"]["thing"]["rows"]["tool"] == 30
-    assert "oracle: 3 table(s) differ" in capsys.readouterr().out
+    assert js["passed"] is False and "oracle" not in js and js["spec_check"]["problems"]
+    assert "directory check: 1 problem(s)" in capsys.readouterr().out
 
 
 def test_command_usage_errors(built, tmp_path, spec_patched):
@@ -261,7 +164,7 @@ def test_command_usage_errors(built, tmp_path, spec_patched):
     assert verify_mod.run_verify_command(_vargs(tmp_path / "nope")) == 2
     assert verify_mod.run_verify_command(_vargs(out, bundle_recompute=True)) == 2
     assert verify_mod.run_verify_command(_vargs(out, full="x.json.gz")) == 2
-    assert verify_mod.run_verify_command(_vargs(out, against=tmp_path / "nope")) == 2
+    assert verify_mod.run_verify_command(_vargs(out, bundle_schema="s.json")) == 2  # without --column-set
     assert main(["verify", str(tmp_path / "nope")]) == 2
 
 
@@ -277,7 +180,7 @@ def test_command_bundle_recompute(tmp_path, monkeypatch):
     spec = passthrough_spec()
     monkeypatch.setattr(build_mod.sqltemplate, "macros_sql", lambda: "SELECT 1")
     monkeypatch.setattr(build_mod, "render_table", passthrough_sql)
-    monkeypatch.setattr(verify_mod, "load_spec", lambda v: spec)
+    monkeypatch.setattr(verify_mod, "spec_for_dir", lambda con, out_dir: spec)
     out = tmp_path / "out"
     build_mod.build(BuildInputs(full=resolve_input(str(FIXTURE))), out, spec=spec)
     con = duckdb.connect()
@@ -308,11 +211,7 @@ def _file_kv(con, path) -> dict[str, str]:
 def test_cli_unreadable_parquet_is_an_input_error(tmp_path, capsys):
     # A truncated Parquet file raises duckdb.Error; the CLI reports it as an input error (exit 2), not as
     # differences (exit 1).
-    from clinvar_gkm_parquet.cli import main
-    from clinvar_gkm_parquet.compat import TABLE_SPEC_VERSION
-    from clinvar_gkm_parquet.spec import load_spec
-
-    for t in load_spec(TABLE_SPEC_VERSION).tables:
-        (tmp_path / t.file_name).write_bytes(b"PAR1 truncated")
+    for name in ("gene", "scv"):
+        (tmp_path / f"{name}.parquet").write_bytes(b"PAR1 truncated")
     assert main(["verify", str(tmp_path)]) == 2
     assert "error:" in capsys.readouterr().err

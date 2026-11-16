@@ -18,10 +18,10 @@ from pathlib import Path
 import duckdb
 import pytest
 import yaml
-from _fixture import FIXTURE, FIXTURES, SECTIONS
-from _input_helpers import bundle_bytes, fixture_sections, local_input, write_gz
+from _fixture import FIXTURE, FIXTURES, SECTIONS, SPEC_SOURCE
+from _fixture import PAIRING as CLINVAR_PAIRING
+from _input_helpers import local_input
 
-from clinvar_gkm_parquet import build as build_mod
 from clinvar_gkm_parquet import transport
 from clinvar_gkm_parquet.build import KV_PREFIX
 from clinvar_gkm_parquet.bundle import (
@@ -33,11 +33,10 @@ from clinvar_gkm_parquet.bundle import (
     stream_bundle,
 )
 from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.compiled import COMPILED_SPEC_FILE, compile_pairing, compiled_spec
+from clinvar_gkm_parquet.compiled import COMPILED_SPEC_FILE, compile_pairing
 from clinvar_gkm_parquet.compiler import table_spec_sha256
-from clinvar_gkm_parquet.errors import BundleFormatError, InputError, SpecError, ToolError
-from clinvar_gkm_parquet.model import BuildInputs, InputFile
-from clinvar_gkm_parquet.spec import load_spec, resolve_spec
+from clinvar_gkm_parquet.errors import BundleFormatError, InputError, ToolError
+from clinvar_gkm_parquet.model import InputFile
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "clinvar_gkm_parquet"
 CIVIC = FIXTURES / "civic"
@@ -203,18 +202,9 @@ def test_a_pairing_flag_alone_is_refused(tmp_path, capsys):
     rc, _, stderr = cli(
         capsys, "build", "--bundle-schema", CIVIC_SCHEMA, "--full", CIVIC_BUNDLES[0], "--out", tmp_path / "o"
     )
-    assert rc == 2 and "--bundle-schema and --column-set go together" in stderr
-    rc, _, stderr = cli(capsys, "compile-spec", "--column-set", CIVIC_COLUMNS)
-    assert rc == 2 and "--bundle-schema and --column-set together" in stderr
-    rc, _, stderr = cli(capsys, "compile-spec", "1.1.0", *PAIRING)
-    assert rc == 2 and "not both" in stderr
-
-
-def test_a_pairing_isnt_mixed_with_another_spec(tmp_path, capsys):
-    """A selection takes a pairing since 1.1.0 (tests/test_generic_selection.py)."""
-    full = CIVIC_BUNDLES[0]
-    rc, _, stderr = cli(capsys, "build", *PAIRING, "--spec", "baseline", "--full", full, "--out", tmp_path / "o")
-    assert rc == 2 and "not with --spec baseline" in stderr
+    assert rc == 2 and "--bundle-schema and --column-set are required" in stderr
+    rc, stdout, stderr = cli(capsys, "compile-spec", "--column-set", CIVIC_COLUMNS)
+    assert rc == 2 and not stdout and "--bundle-schema and --column-set are required" in stderr
 
 
 def test_a_column_set_for_another_schema_is_refused(tmp_path, capsys):
@@ -255,23 +245,23 @@ def test_an_unknown_root_member_is_kept_under_an_open_root(tmp_path, capsys):
     assert json.loads((tmp_path / "r.json").read_text()) == doc
 
 
-# --- ClinVar's pretty-printed sub-bundle, by the default flags ---------------------------------------------------
+# --- ClinVar's pretty-printed sub-bundle, with ClinVar-GKM's pairing ---------------------------------------------
 
 
 @pytest.fixture(scope="module")
 def sub_bundle(tmp_path_factory) -> Path:
     out = tmp_path_factory.mktemp("sub") / "out"
-    assert main(["build", "--full", str(SUB_BUNDLE), "--out", str(out)]) == 0
+    assert main(["build", "--full", str(SUB_BUNDLE), *CLINVAR_PAIRING, "--out", str(out)]) == 0
     return out
 
 
-def test_the_sub_bundle_takes_the_general_reader_and_the_default_pairing(sub_bundle):
+def test_the_sub_bundle_takes_the_general_reader(sub_bundle):
     assert layout_of(local_input(SUB_BUNDLE)) == "json"
     assert sorted(p.stem for p in sub_bundle.glob("*.parquet")) == sorted(
         SECTIONS
     )  # no root_values table: still 20
     kv = kv_of(sub_bundle / "scv.parquet")
-    _, source = compiled_spec("1.1.0")
+    source = SPEC_SOURCE
     assert kv["bundle_schema_version"] == "1.1.0" and kv["schema_set_sha256"] == source.schema_set_sha256
     # Its keys came sorted, so the spec the set carries is the key-sorted one, with the same columns.
     written = json.loads((sub_bundle / COMPILED_SPEC_FILE).read_text())
@@ -289,39 +279,39 @@ def test_the_sub_bundle_rebuilds_json_equal(sub_bundle, tmp_path, capsys):
     assert rc == 0 and "round trip: JSON-equal" in stdout, stdout + stderr
 
 
-def test_a_fixed_spec_refuses_a_bundle_that_isnt_in_the_line_layout(tmp_path, capsys):
-    for name in ("clinvar-gkm", "baseline"):
-        rc, _, stderr = cli(capsys, "build", "--full", SUB_BUNDLE, "--spec", name, "--out", tmp_path / name)
-        assert rc == 2 and "the record is not a JSON object on one line" in stderr
-
-
-def test_a_selection_refuses_a_bundle_that_isnt_in_the_line_layout(tmp_path, capsys):
+def test_a_selection_reads_a_bundle_in_another_layout(tmp_path, capsys):
+    """The pairing's reader takes any layout (the general reader), so a selection does too."""
+    out = tmp_path / "s.json.gz"
     rc, _, stderr = cli(
-        capsys, "select", "--full", SUB_BUNDLE, "--driver", "gene", "--ids", "x", "--out", tmp_path / "s.json.gz"
+        capsys,
+        "select",
+        "--full",
+        SUB_BUNDLE,
+        *CLINVAR_PAIRING,
+        "--driver",
+        "gene",
+        "--ids",
+        "ncbigene:3077",
+        "--out",
+        out,
     )
-    assert rc == 2 and "a selection reads the line layout" in stderr
+    assert rc == 0, stderr
+    assert "ncbigene:3077" in json.loads(gzip.decompress(out.read_bytes()))["gene"]
 
 
-# --- the default path: versions ----------------------------------------------------------------------------------
+# --- the pairing ----------------------------------------------------------------------------------
 
 
-def test_a_bundle_with_no_version_needs_its_pairing(tmp_path, capsys):
-    rc, _, stderr = cli(capsys, "build", "--full", CIVIC_BUNDLES[0], "--out", tmp_path / "o")
-    assert rc == 2 and "no 'schema_version' at the root" in stderr and "--bundle-schema and --column-set" in stderr
+def test_a_bundle_with_no_pairing_is_refused_before_it_is_read(tmp_path, capsys):
+    """There is no default bundle (ADR 0009): the tool reads no version from the bundle to find a schema."""
+    rc, _, stderr = cli(capsys, "build", "--full", tmp_path / "missing.json", "--out", tmp_path / "o")
+    assert rc == 2 and "--bundle-schema and --column-set are required" in stderr and "no default" in stderr
+    assert not (tmp_path / "o").exists()
 
 
-def test_an_unknown_version_whose_schemas_cant_be_fetched_is_refused(tmp_path, capsys):
-    bad = write_gz(tmp_path / "in" / "b.json.gz", bundle_bytes({"gene": fixture_sections()["gene"]}, "8.8.8"))
-    rc, _, stderr = cli(capsys, "build", "--full", bad, "--out", tmp_path / "out")
-    assert rc == 2
-    assert "bundle schema_version '8.8.8': table spec sections can't read it" in stderr
-    assert "clinvar-gkm/8.8.8/clinvar-gkm-bundle.schema.json" in stderr and "HTTP 404" in stderr
-    assert not (tmp_path / "out").exists()
-
-
-def test_a_published_version_is_fetched_once_through_the_data_file(tmp_path, capsys, monkeypatch):
-    """A version with no snapshot: the schema and the column set come from default-bundle.yaml's URLs, then the
-    cache. Here the "network" serves the CIViC pairing, renamed to the version, from the fixture's files."""
+def test_a_pairing_by_url_is_fetched_once_then_cached(tmp_path, capsys, monkeypatch):
+    """The schema and the column set by URL come from the network, then the cache. Here the "network" serves the
+    CIViC pairing, renamed to a version, from the fixture's files."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     version = "8.8.1"
     base = f"https://w3id.org/clingen/schema/clinvar-gkm/{version}/clinvar-gkm-bundle"
@@ -363,15 +353,16 @@ def test_a_published_version_is_fetched_once_through_the_data_file(tmp_path, cap
     doc = {"schema_version": version, **doc}
     path = tmp_path / "b.json"
     path.write_text(json.dumps(doc))
-    assert cli(capsys, "build", "--full", path, "--out", tmp_path / "out")[0] == 0
+    by_url = ("--bundle-schema", f"{base}.schema.json", "--column-set", f"{base}.columns.yaml")
+    assert cli(capsys, "build", "--full", path, *by_url, "--out", tmp_path / "out")[0] == 0
     n = len(got)
     assert f"{base}.schema.json" in got and f"{base}.columns.yaml" in got
     compile_pairing.cache_clear()
-    assert cli(capsys, "build", "--full", path, "--out", tmp_path / "out2")[0] == 0
+    assert cli(capsys, "build", "--full", path, *by_url, "--out", tmp_path / "out2")[0] == 0
     assert len(got) == n  # from the cache
 
 
-def test_a_version_whose_schemas_load_but_whose_column_set_doesnt_fit_stops_at_compile(tmp_path, capsys):
+def test_a_column_set_that_doesnt_fit_its_schema_stops_at_compile(tmp_path, capsys):
     bad_columns = tmp_path / "c.yaml"
     doc = yaml.safe_load(CIVIC_COLUMNS.read_text())
     doc["sections"]["feature"]["name"] = "integer"
@@ -391,54 +382,11 @@ def test_a_version_whose_schemas_load_but_whose_column_set_doesnt_fit_stops_at_c
     assert rc == 2 and "section feature: position name: contradicts the schema" in stderr
 
 
-@pytest.mark.parametrize("name", ["clinvar-gkm", "baseline"])
-def test_fixed_specs_keep_their_list_and_look_at_no_schema_set(tmp_path, capsys, monkeypatch, name):
-    def no_load(*a, **k):
-        raise AssertionError("a fixed spec must refuse from its own list")
-
-    monkeypatch.setattr("clinvar_gkm_parquet.schemas.fetch_set", no_load)
-    bad = write_gz(tmp_path / "in" / "b.json.gz", bundle_bytes({"gene": fixture_sections()["gene"]}, "8.8.8"))
-    rc, _, stderr = cli(capsys, "build", "--full", bad, "--spec", name, "--out", tmp_path / name)
-    assert rc == 2 and "bundle schema_version 8.8.8 is not one table spec 1.0 reads (1.1.0)" in stderr
-
-
-def test_a_custom_spec_is_checked_against_the_schema_sets_it_lists(tmp_path, capsys):
-    raw = yaml.safe_load((FIXTURES / "custom-spec" / "tables.yaml").read_text())
-    raw["bundle_schema_versions"] = ["8.8.8"]
-    path = tmp_path / "custom.yaml"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    rc, _, stderr = cli(capsys, "build", "--full", FIXTURE, "--spec", path, "--out", tmp_path / "out")
-    assert rc == 2 and "bundle_schema_versions 8.8.8: can't read its sections" in stderr and "HTTP 404" in stderr
-
-
-def test_compile_spec_refuses_what_a_build_refuses(capsys):
-    rc, stdout, stderr = cli(capsys, "compile-spec", "8.8.8")
-    assert rc == 2 and not stdout and "table spec sections can't read it" in stderr
-    rc, _, stderr = cli(capsys, "compile-spec", "../1.1.0")
-    assert rc == 2 and "is not a version" in stderr
-
-
 def test_compile_spec_writes_what_a_build_uses(capsys):
-    rc, stdout, _ = cli(capsys, "compile-spec", "1.1.0")
-    _, source = compiled_spec("1.1.0")
+    rc, stdout, _ = cli(capsys, "compile-spec", *CLINVAR_PAIRING)
+    source = SPEC_SOURCE
     assert rc == 0 and table_spec_sha256(yaml.safe_load(stdout)) == source.sha256
     assert f"# schema_set_sha256: {source.schema_set_sha256}" in stdout
-
-
-def test_build_api_with_no_spec_compiles_for_the_bundle(tmp_path):
-    result = build_mod.build(BuildInputs(full=local_input(FIXTURE)), tmp_path / "out")
-    assert len(result.tables) == len(SECTIONS)
-    kv = kv_of(tmp_path / "out" / "gene.parquet")
-    assert (kv["table_spec"], kv["table_spec_version"]) == ("sections", "1.0") and "table_spec_builtin" not in kv
-
-
-def test_resolving_the_compiled_spec_needs_a_version():
-    with pytest.raises(SpecError, match="compiled for a bundle's schema_version"):
-        resolve_spec("sections")
-    with pytest.raises(SpecError, match="no built-in table spec sections 9.9"):
-        resolve_spec("sections@9.9", "1.1.0")
-    with pytest.raises(SpecError, match="has no file"):
-        load_spec("1.0", "sections")
 
 
 # --- the readers -------------------------------------------------------------------------------------------------
@@ -653,7 +601,7 @@ def _tamper_kv(directory: Path, key: str, value: str | None) -> None:
 @pytest.fixture(scope="module")
 def excerpt_set(tmp_path_factory) -> Path:
     out = tmp_path_factory.mktemp("excerpt") / "out"
-    assert main(["build", "--full", str(FIXTURE), "--out", str(out)]) == 0
+    assert main(["build", "--full", str(FIXTURE), *CLINVAR_PAIRING, "--out", str(out)]) == 0
     return out
 
 
@@ -665,7 +613,7 @@ def excerpt_copy(excerpt_set, tmp_path) -> Path:
 
 
 def test_the_excerpt_set_holds_its_spec_and_rebuilds_byte_for_byte(excerpt_set, tmp_path, capsys):
-    _, source = compiled_spec("1.1.0")
+    source = SPEC_SOURCE
     written = json.loads((excerpt_set / COMPILED_SPEC_FILE).read_text())
     assert table_spec_sha256(written) == source.sha256
     m = json.loads((excerpt_set / "manifest.json").read_text())
@@ -706,6 +654,28 @@ def test_a_set_missing_its_compiled_spec_is_refused(excerpt_copy, capsys):
     assert rc == 2 and "it is missing" in stderr
 
 
+def test_verify_checks_a_pairing_it_is_given(excerpt_set, sub_bundle, capsys):
+    """A pairing on `verify` must compile to the spec that wrote the files: the three hashes every file records."""
+    rc, stdout, stderr = cli(capsys, "verify", excerpt_set, *CLINVAR_PAIRING)
+    assert rc == 0 and "pairing" not in stdout, stdout + stderr
+    assert cli(capsys, "verify", sub_bundle, *CLINVAR_PAIRING)[0] == 0  # the key-sorted form matches too
+    rc, stdout, _ = cli(capsys, "verify", excerpt_set, *PAIRING)
+    assert rc == 1
+    for key in ("table_spec_sha256", "schema_set_sha256", "column_set_sha256"):
+        assert f"--bundle-schema and --column-set compile to {key}" in stdout
+    rc, _, stderr = cli(capsys, "verify", excerpt_set, "--column-set", CIVIC_COLUMNS)
+    assert rc == 2 and "--bundle-schema and --column-set go together" in stderr
+
+
+def test_verify_refuses_a_set_of_a_retired_spec(excerpt_copy, capsys):
+    """A set 1.x wrote with a retired spec (baseline, clinvar-gkm or a custom tables.yaml) has no compiled spec."""
+    for key in ("table_spec_sha256", "schema_set_sha256", "column_set_sha256"):
+        _tamper_kv(excerpt_copy, key, None)
+    _tamper_kv(excerpt_copy, "table_spec", "baseline")
+    rc, _, stderr = cli(capsys, "verify", excerpt_copy)
+    assert rc == 2 and "not a compiled spec" in stderr and "the 1.x tool" in stderr
+
+
 def test_a_manifest_that_disagrees_with_the_files_is_found(excerpt_copy, tmp_path, capsys):
     m = json.loads((excerpt_copy / "manifest.json").read_text())
     m["table_spec"]["column_set_sha256"] = "0" * 64
@@ -714,22 +684,6 @@ def test_a_manifest_that_disagrees_with_the_files_is_found(excerpt_copy, tmp_pat
     assert rc == 1 and "table_spec.column_set_sha256" in stdout
     rc, _, stderr = cli(capsys, "rebuild", excerpt_copy, "-o", tmp_path / "r.json")
     assert rc == 2 and "table_spec.column_set_sha256" in stderr
-
-
-@pytest.mark.parametrize("name", ["clinvar-gkm", "baseline"])
-def test_a_fixed_spec_records_no_compiled_hash_and_writes_no_spec_file(tmp_path, capsys, name):
-    out = tmp_path / "out"
-    assert cli(capsys, "build", "--full", FIXTURE, "--spec", name, "--tables", "gene", "--out", out)[0] == 0
-    kv = kv_of(out / "gene.parquet")
-    assert not {"table_spec_sha256", "schema_set_sha256", "column_set_sha256", "table_spec_builtin"} & set(kv)
-    assert "schema_set_sha256" not in json.loads((out / "manifest.json").read_text())["table_spec"]
-    assert not (out / COMPILED_SPEC_FILE).exists()
-
-
-def test_verify_accepts_the_built_in_name_for_a_compiled_set(excerpt_set, capsys):
-    assert cli(capsys, "verify", excerpt_set, "--spec", "sections")[0] == 0
-    rc, _, stderr = cli(capsys, "verify", excerpt_set, "--spec", "baseline")
-    assert rc == 2 and "--spec baseline is baseline 1.0, but the files were written by sections 1.0" in stderr
 
 
 # --- the generic path knows no producer --------------------------------------------------------------------------
@@ -764,17 +718,10 @@ def test_the_core_imports_only_the_core():
     assert reached == set(CORE), sorted(reached - set(CORE))
 
 
-@pytest.mark.parametrize("module", [*CORE, "default_pairing", "compiled"])
+@pytest.mark.parametrize("module", [*CORE, "compiled"])
 def test_the_core_names_no_producer(module):
     hits = []
     for line in (SRC / f"{module}.py").read_text(encoding="utf-8").splitlines():
         if PRODUCER_WORDS.search(line) and (module, line.strip().split("  #")[0].strip()) not in ALLOWED_LINES:
             hits.append(line.strip())
     assert not hits, hits
-
-
-def test_the_default_bundle_is_data():
-    path = SRC.parents[1] / "spec" / "sections" / "default-bundle.yaml"
-    doc = yaml.safe_load(path.read_text())
-    assert set(doc) == {"version_property", "schema_url", "column_set_url"}
-    assert "{version}" in doc["schema_url"] and "{version}" in doc["column_set_url"]

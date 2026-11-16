@@ -15,11 +15,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import pytest
-from _fixture import FIXTURE, SECTIONS
+from _fixture import FIXTURE, SECTIONS, strict_rules
 
 from clinvar_gkm_parquet import select as sel
 from clinvar_gkm_parquet.bundle import stage_bundle
-from clinvar_gkm_parquet.default_pairing import reader_rules
 from clinvar_gkm_parquet.errors import BundleFormatError, InputError, SchemaVersionError
 from clinvar_gkm_parquet.model import InputFile
 
@@ -130,7 +129,10 @@ def seed_of(section: str) -> str:
 
 
 def run(tmp_path: Path, seeds: dict, name: str = "selected.json.gz", src=None, **kw) -> sel.SelectionResult:
-    return sel.select(src if src is not None else fixture_input(), seeds, tmp_path / name, **kw)
+    src = src if src is not None else fixture_input()
+    if isinstance(src, InputFile):
+        src = sel.BundleFileSource(src, rules=strict_rules())
+    return sel.select(src, seeds, tmp_path / name, **kw)
 
 
 def output_nodes(path: Path) -> dict[str, list[tuple[bytes, bytes]]]:
@@ -263,7 +265,7 @@ def test_output_passes_stage_bundle(tmp_path):
     assert hashlib.sha256(result.path.read_bytes()).hexdigest() == result.sha256
     assert result.path.stat().st_size == result.size
     inp = InputFile(str(result.path), result.path.name, result.sha256, "explicit", result.size)
-    staged = stage_bundle(inp, tmp_path / "work", reader_rules())
+    staged = stage_bundle(inp, tmp_path / "work", strict_rules())
     assert {s: x.records for s, x in staged.sections.items()} == result.section_counts
     assert staged.schema_version == result.schema_version == "1.1.0"
     assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")]  # no work or partial files left
@@ -293,17 +295,21 @@ def test_unsupported_schema_version_fails(tmp_path):
     )
     path = tmp_path / "v9.json.gz"
     path.write_bytes(gzip.compress(text, mtime=0))
-    with pytest.raises(SchemaVersionError, match="'9.9.9' can't be read.*HTTP 404"):
+    with pytest.raises(SchemaVersionError, match="'9.9.9' is not the fixture's 1.1.0"):
         run(tmp_path, {"vcv": [seed_of("vcv")]}, src=fixture_input(path, None))
 
 
 def test_reopened_source_must_match_pass_1(tmp_path):
     other = tmp_path / "other.json.gz"
     other.write_bytes(gzip.compress(gzip.decompress(FIXTURE.read_bytes()), compresslevel=1, mtime=0))
-    src = sel.BundleFileSource(fixture_input(), reopen=lambda n: open(other, "rb"), checkpoint_bytes=1000)
+    src = sel.BundleFileSource(
+        fixture_input(), reopen=lambda n: open(other, "rb"), checkpoint_bytes=1000, rules=strict_rules()
+    )
     with pytest.raises(sel.SourceChangedError, match="re-opened source differs from the pass-1 stream"):
         run(tmp_path, {"vcv": [seed_of("vcv")]}, src=src)
-    same = sel.BundleFileSource(fixture_input(), reopen=lambda n: open(FIXTURE, "rb"), checkpoint_bytes=1000)
+    same = sel.BundleFileSource(
+        fixture_input(), reopen=lambda n: open(FIXTURE, "rb"), checkpoint_bytes=1000, rules=strict_rules()
+    )
     assert run(tmp_path, {"vcv": [seed_of("vcv")]}, src=same).records > 1
 
 

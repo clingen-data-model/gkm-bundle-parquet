@@ -8,7 +8,7 @@ engines' errors, and the script exits 1. Timings and counts go to <out>/summary.
 
 Usage:
     python scripts/validate-equivalence.py <bundle> <out dir> --schema-set NAME=DIR [--schema-set ...]
-        [--index FILE] [--workers N] [--engines rs,python]
+        [--version-property NAME] [--workers N] [--engines rs,python]
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ def run(bundle: str, schema: str, engine: str, out: Path, tag: str, args) -> dic
         "--failures",
         str(out / f"{tag}.failures.jsonl"),
     ]
-    if args.index:
-        cmd += ["--index", args.index]
+    if args.version_property:
+        cmd += ["--version-property", args.version_property]
     if args.workers:
         cmd += ["--workers", str(args.workers)]
     t = time.time()
@@ -60,7 +60,7 @@ def main() -> int:
     p.add_argument("bundle")
     p.add_argument("out", type=Path)
     p.add_argument("--schema-set", action="append", required=True, help="NAME=DIR")
-    p.add_argument("--index")
+    p.add_argument("--version-property")
     p.add_argument("--workers", type=int)
     p.add_argument("--engines", default="rs,python")
     args = p.parse_args()

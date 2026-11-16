@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from _fixture import CLINVAR_SCHEMA
 
-from clinvar_gkm_parquet.default_pairing import schema_source
 from clinvar_gkm_parquet.errors import SchemaSetError
 from clinvar_gkm_parquet.schemas import (
     MANIFEST,
@@ -207,23 +207,23 @@ def test_a_set_on_disk_whose_refs_leave_the_set_is_refused(tmp_path):
         read_set(tmp_path)
 
 
-# --- the shipped snapshot ----------------------------------------------------------------------------------------
+# --- a vendored set (ClinVar-GKM's 1.1.0, a fixture) -------------------------------------------------------------
 
 
 def _no_fetch(url):
     raise AssertionError(f"fetched {url}")
 
 
-def test_the_snapshot_is_used_without_any_fetch():
-    source = schema_source("1.1.0")
+def test_a_vendored_set_is_used_without_any_fetch():
+    source = str(CLINVAR_SCHEMA)
     s = load_schema_set(source, fetch=_no_fetch)
     assert s.sha256 == "741a29fcd86f07003f0d27d6c94ba0b414ec8f69fae479cb76cc67c4de47d798"
     assert s.bundle["properties"]["schema_version"]["const"] == "1.1.0"
     assert all(f.id == f.url for f in s.files.values() if f.id != s.bundle_id)
 
 
-def test_the_snapshot_keeps_original_bytes_and_lists_every_file():
-    directory = Path(schema_source("1.1.0"))
+def test_a_vendored_set_keeps_original_bytes_and_lists_every_file():
+    directory = CLINVAR_SCHEMA
     manifest = json.loads((directory / MANIFEST).read_text())
     listed = {e["file"] for e in manifest["files"]}
     on_disk = {str(p.relative_to(directory)) for p in directory.rglob("*") if p.is_file() and p.name != MANIFEST}
@@ -243,7 +243,25 @@ def test_vendor_script_writes_a_set_a_build_can_read_with_no_network(tmp_path):
     assert read_set(out).bundle_id == "urn:x:2" and (out / "root.schema.json").read_bytes() == root.read_bytes()
 
 
+# What w3id serves for ClinVar-GKM 1.1.0 (checked 2026-11-16). Its root schema keeps the original "$id"
+# ".../1.1.0/json/ClinvarGkmBundle"; the fixture carries the corrected ".../1.1.0/clinvar-gkm-bundle.schema.json"
+# (tests/fixtures/clinvar-gkm/1.1.0/README.md). The maintainer chose to leave the served set as it is (2026-11-16).
+SERVED_1_1_0 = "https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/clinvar-gkm-bundle.schema.json"
+SERVED_1_1_0_ID = "https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/json/ClinvarGkmBundle"
+SERVED_1_1_0_ROOT_SHA256 = "48369c69648459b1e138a1f59c1a349742f5e0b93a93c68ccc9df77b8b73ede2"
+SERVED_1_1_0_SET_SHA256 = "03409226627844411de48d31b4fd873e2f2c42baa4256441a86c7b2d8ae55ef6"
+
+
 @pytest.mark.network
-def test_fetching_1_1_0_by_url_gives_the_snapshot():
-    url = "https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/clinvar-gkm-bundle.schema.json"
-    assert fetch_set(url).sha256 == load_schema_set(schema_source("1.1.0")).sha256
+def test_fetching_1_1_0_by_url_gives_the_fixture_set_but_the_root_id():
+    """w3id serves the fixture's 94 other files byte for byte, and a root that differs only in its $id line."""
+    served = fetch_set(SERVED_1_1_0)
+    fixture = load_schema_set(str(CLINVAR_SCHEMA))
+    assert (served.bundle_id, served.sha256) == (SERVED_1_1_0_ID, SERVED_1_1_0_SET_SHA256)
+    root = served.files[SERVED_1_1_0_ID]
+    assert root.sha256 == SERVED_1_1_0_ROOT_SHA256
+    others = {sid: f.raw for sid, f in served.files.items() if sid != SERVED_1_1_0_ID}
+    assert others == {sid: f.raw for sid, f in fixture.files.items() if sid != fixture.bundle_id}
+    corrected = fixture.files[fixture.bundle_id].raw.decode()
+    want = corrected.replace(f'"$id": "{fixture.bundle_id}"', f'"$id": "{SERVED_1_1_0_ID}"', 1)
+    assert want != corrected and root.raw.decode() == want

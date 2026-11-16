@@ -12,7 +12,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 # duckdb is pinned exactly: the output bytes depend on it (design plan §9.3, D8). 1.5.4 is the version that
-# merges ClinVar-GKM's published Parquet today. PyYAML reads the table spec (spec/<version>/tables.yaml).
+# merges ClinVar-GKM's published Parquet today. PyYAML reads column sets.
 # jsonschema-rs is `validate`'s default engine, pinned exactly: its verdicts are proved equal to the reference
 # validator's at this version (docs/validate.md).
 dependencies = [
@@ -50,17 +50,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/clinvar_gkm_parquet"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"spec" = "clinvar_gkm_parquet/_spec"
-"schemas" = "clinvar_gkm_parquet/_schemas"
-
 [tool.hatch.build.targets.sdist]
-include = ["src", "spec", "schemas", "tests", "scripts", "README.md", "CHANGELOG.md", "LICENSE"]
+include = ["src", "tests", "scripts", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "network: reads from data.clinvar-gkm.org or w3id.org (opt-in: pytest -m network)",
+    "network: reads from the network, e.g. w3id.org (opt-in: pytest -m network)",
 ]
 addopts = "-m 'not network'"
 
