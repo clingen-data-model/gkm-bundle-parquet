@@ -94,6 +94,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _inputs(s)
     s.add_argument("--spec", help=SPEC_HELP + "; it defines the driver table --where reads")
+    _pairing(s)
     s.add_argument("--out", required=True, type=Path, help="the mini-bundle to write (.json.gz; must not exist)")
     _engine(s)
     _selection(s, required=True)

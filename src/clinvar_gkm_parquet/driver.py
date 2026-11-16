@@ -14,7 +14,9 @@ picks the record source and runs the engine:
 - **Explicit keys** (`--ids`, `--ids-file`) are added to the `--where` keys (their union). They need no staging
   pass; the engine fails on any the driver section doesn't hold.
 - **The source.** A full alone is read by select.BundleFileSource; a full plus deltas by replay.ReplayedSource,
-  the same change map the build applies, so the selection sees exactly the state the build would stage.
+  the same change map the build applies, so the selection sees exactly the state the build would stage. Given a
+  pairing (`--bundle-schema`, `--column-set`), the source's root is read by the pairing's rules: its version
+  property, if any, and its sections (ADR 0008 decision 4.1, ADR 0009); without one, by the default bundle's.
 - **Provenance.** `driver`, `where` and `ids_sha256` (select.ids_sha256 of the explicit keys, or null) join the
   engine's parameters in `SelectionResult.metadata_json()`, the `clinvar_gkm_parquet.selection` entry.
 
@@ -28,13 +30,14 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import duckdb
 
-from . import build, replay, select, sqltemplate
+from . import build, compiled, replay, select, sqltemplate
 from .build import SectionPipeline, key_column, sql_ident
+from .bundle import RootRules
 from .errors import InputError
 from .model import BuildInputs, InputFile, StreamedBundle
 from .select import SelectionError, SelectionResult
@@ -53,6 +56,7 @@ class Driver:
     follow: str = "out"
     max_depth: int | None = None
     sections: tuple[str, ...] | None = None
+    rules: RootRules | None = None  # how to read the source's root: a pairing's (None: the default bundle's)
 
 
 @dataclass(frozen=True)
@@ -150,6 +154,13 @@ def driver_from_args(args) -> Driver | None:
     )
 
 
+def with_pairing_rules(drv: Driver | None, spec: Spec, pairing: tuple[str | None, str | None]) -> Driver | None:
+    """The driver, reading the source's root by the spec's rules when a pairing compiled it."""
+    if drv is None or pairing[0] is None:
+        return drv
+    return replace(drv, rules=compiled.reader_rules(spec))
+
+
 # --- the driver keys and the selection -------------------------------------------------------------------------
 
 
@@ -240,7 +251,7 @@ def run_selection(
         source = replay.ReplayedSource(inputs.full, chain)
         files = source.files
     else:
-        source = files = select.BundleFileSource(inputs.full)
+        source = files = select.BundleFileSource(inputs.full, rules=drv.rules)
     provenance = {
         "driver": table.name,
         "where": drv.where,
@@ -300,8 +311,12 @@ def run_select_command(args) -> int:
     out = Path(args.out)
     if out.exists():
         raise InputError(f"{out} already exists; select writes a new file")
+    pairing = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
+    if pairing[0] is not None and getattr(args, "delta", None):
+        raise InputError("--bundle-schema and --column-set read one bundle: not with --delta")
     inputs = build.resolve_build_inputs(args)
-    spec, _ = build.resolve_spec_for(spec_arg, inputs)
+    spec, _ = build.resolve_spec_for(spec_arg, inputs, *pairing)
+    drv = with_pairing_rules(drv, spec, pairing)
     driver_table(spec, drv)
     root = Path(args.work_dir) if args.work_dir else out.parent
     root.mkdir(parents=True, exist_ok=True)

@@ -240,10 +240,11 @@ def staging_name(inp: InputFile) -> str:
 
 
 class _StagingSink:
-    """Writes every section to `<out_dir>/<section>.tsv.gz`."""
+    """Writes every section to `<out_dir>/<section>.tsv.gz`; root values go in `root_values` when it is given."""
 
-    def __init__(self, out_dir: Path):
+    def __init__(self, out_dir: Path, root_values: dict[str, bytes] | None = None):
         self.out_dir = out_dir
+        self.root_values = root_values
         self.staged: dict[str, tuple[Path, int, int]] = {}
         self._writer: SectionWriter | None = None
 
@@ -261,16 +262,21 @@ class _StagingSink:
             self.staged[section] = (w.paths[0], w.records, w.max_line)
 
     def root_value(self, name: str, value: bytes) -> None:
-        raise BundleFormatError(f"root value {name!r}: staging holds only collections")
+        if self.root_values is None:
+            raise BundleFormatError(f"root value {name!r}: staging holds only collections")
+        self.root_values[name] = value
 
     def abort(self) -> None:
         if self._writer is not None:
             self._writer.abort()
 
 
-def stage_bundle(inp: InputFile, work_dir: Path, rules: RootRules) -> StagedBundle:
+def stage_bundle(
+    inp: InputFile, work_dir: Path, rules: RootRules, *, root_values: dict[str, bytes] | None = None
+) -> StagedBundle:
     """Stream `inp` once into `work_dir/<name>/<section>.tsv.gz` and return what was staged (the whole bundle;
-    the build itself stages one section at a time, build.py).
+    the build itself stages one section at a time, build.py). A root value is refused, unless `root_values` is
+    given: then each is put in it, by name, as its JSON text.
 
     The files are written to a temporary folder and moved into place only after the whole bundle has parsed
     and its sha256 matched, so a failed run never leaves staging that looks complete.
@@ -279,7 +285,7 @@ def stage_bundle(inp: InputFile, work_dir: Path, rules: RootRules) -> StagedBund
     work_dir.mkdir(parents=True, exist_ok=True)
     final = work_dir / staging_name(inp)
     tmp = Path(tempfile.mkdtemp(prefix=f".{final.name}.", suffix=".partial", dir=work_dir))
-    sink = _StagingSink(tmp)
+    sink = _StagingSink(tmp, root_values)
     try:
         try:
             streamed = stream_bundle(inp, sink, rules)
