@@ -104,9 +104,9 @@ CREATE OR REPLACE MACRO cgp_range_bound(j, i, ctx, k) AS
     lambda r: CASE WHEN json_type(r) = 'ARRAY' THEN CAST(json_extract(r, concat('$[', i, ']')) AS BIGINT)
                    ELSE CAST(r AS BIGINT) END))[1];
 
--- Round trip (roundtrip.py, ADR 0005). JSON text of a string as Python's json.dumps (with ensure_ascii=False)
--- writes it: DuckDB's to_json, except that a \u escape (control characters) gets lower-case
--- hex digits, as Python writes them. x is used three times: pass a column, a struct field or a lambda variable.
+-- Round trip (roundtrip.py, ADR 0005). JSON text of a string: DuckDB's to_json, except that a \u escape (control
+-- characters) gets lower-case hex digits, as RFC 8785 and Python's json.dumps write them. x is used three times:
+-- pass a column, a struct field or a lambda variable.
 CREATE OR REPLACE MACRO cgp_json_lower_u(j) AS
   array_to_string(list_transform(regexp_extract_all(j, '\\u[0-9A-Fa-f]{4}|\\.|[^\\]+'),
     lambda t: CASE WHEN starts_with(t, '\u') THEN lower(t) ELSE t END), '');
@@ -121,14 +121,3 @@ CREATE OR REPLACE MACRO cgp_ptr_section(sec, id, targets, ctx, k) AS
     ELSE cgp_fail(ctx, k, concat('the pointer to ', id, ' names section ', coalesce(sec, '(none)'),
       ', not one of ', targets::VARCHAR))
   END;
-
--- The 1-based character position where a and b first differ (0 when equal).
-CREATE OR REPLACE MACRO cgp_first_diff(a, b) AS
-  coalesce(list_position(list_transform(range(1, greatest(length(a), length(b)) + 2),
-    lambda i: substr(a, i, 1) IS DISTINCT FROM substr(b, i, 1)), true), 0);
-
--- Stop the build: a row written back as JSON differs from its bundle line.
-CREATE OR REPLACE MACRO cgp_roundtrip_fail(ctx, k, rebuilt, line) AS
-  cgp_fail(ctx, k, concat('the row written back as JSON differs from the bundle line at character ',
-    cgp_first_diff(rebuilt, line), ': rebuilt ...', substr(rebuilt, greatest(cgp_first_diff(rebuilt, line) - 60, 1), 120),
-    '... bundle ...', substr(line, greatest(cgp_first_diff(rebuilt, line) - 60, 1), 120), '...'));

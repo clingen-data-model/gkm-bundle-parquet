@@ -530,7 +530,7 @@ def test_run_build_command(monkeypatch, capsys, tmp_path):
     assert run_build_command(args) == 0
     out = capsys.readouterr().out
     n = COUNTS["gene"] + COUNTS["submitter"] + COUNTS["allele"]
-    assert f"built 3 table(s) of spec sections 1.0, {n} rows" in out
+    assert f"built 3 table(s) of spec sections 2.0, {n} rows" in out
     kv = _kv(duckdb.connect(), tmp_path / "o" / "gene.parquet")
     assert kv[KV_PREFIX + "table_spec"] == "sections" and KV_PREFIX + "selection" not in kv
     assert kv[KV_PREFIX + "table_spec_sha256"] == SPEC_SOURCE.sha256
@@ -545,7 +545,7 @@ def test_build_api_needs_a_spec(tmp_path):
     res = build(_fixture_inputs(), tmp_path / "o", tables=["gene"], spec=SPEC, spec_source=SPEC_SOURCE)
     assert [t.table for t in res.tables] == ["gene"]
     kv = _kv(duckdb.connect(), tmp_path / "o" / "gene.parquet")
-    assert (kv[KV_PREFIX + "table_spec"], kv[KV_PREFIX + "table_spec_version"]) == ("sections", "1.0")
+    assert (kv[KV_PREFIX + "table_spec"], kv[KV_PREFIX + "table_spec_version"]) == ("sections", "2.0")
     assert KV_PREFIX + "table_spec_builtin" not in kv
 
 

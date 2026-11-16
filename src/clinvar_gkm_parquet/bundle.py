@@ -3,11 +3,12 @@
 Owned by the input-side work package. Layout is a property of the file, so `stream_bundle` chooses a reader from
 the first lines (`sniff_layout`); either way it hands every record to a sink as it is read:
 
-- The line layout: one record per line, read by a strict grammar and streamed, so its size doesn't matter, and its
-  text is what `rebuild` writes back byte for byte.
+- The line layout: one record per line, read by a strict grammar and streamed, so its size doesn't matter.
 - Any other JSON (pretty-printed, minified): `json.load`, in memory, so a file must fit in memory. It is turned
-  into the canonical line layout, every record's keys sorted, and read by the same grammar. Its file bytes aren't
-  kept: the promise is JSON-equal. A duplicate key or a non-JSON number stops it.
+  into the line layout, every record's keys sorted, and read by the same grammar. A duplicate key or a non-JSON
+  number stops it.
+
+Either way the round trip is record-identical (ADR 0008; canonical.py): the bytes of the file are not kept.
 
 The caller says how to read a bundle's root with `RootRules`: which property holds the version, and, once the
 version is known, which collections the bundle may hold (`BundleShape`). `peek_version` reads only the first lines,
@@ -20,13 +21,6 @@ The sink sees `begin(version)` ("" for a bundle with no version), which may refu
 looked at, then per section `open_section(name)`, which returns the function each of the section's records is
 passed to as `(key as JSON bytes, record bytes)`, and `close_section(name)`; and `root_value(name, JSON text)` for
 each root value that is neither the version nor a collection.
-
-With `text_digests` (a lossless build, ADR 0005), the pass also hashes the uncompressed text, of the line layout:
-the whole of it (StreamedBundle.text_sha256) and, per section, its record lines exactly as written (each record
-line with its `,` and newline; `section_text_sha256`), which the sink receives through
-`section_text(name, sha256)` just before `close_section(name)`. The rest of the text is fixed by the grammar below,
-so the two together pin the text byte for byte. For a file read by the general reader, that text is the canonical
-one.
 
 The grammar:
 
@@ -469,38 +463,29 @@ def _canonical_text(name: str, doc: dict, rules: RootRules) -> bytes:
     return b"{\n" + b",\n".join(members) + (b"\n}\n" if members else b"}\n")
 
 
-def stream_bundle(inp: InputFile, sink: Sink, rules: RootRules, *, text_digests: bool = False) -> StreamedBundle:
+def stream_bundle(inp: InputFile, sink: Sink, rules: RootRules) -> StreamedBundle:
     """Read `inp` once, passing every record to `sink` (module docstring), and check its sha256 at the end.
-    `text_digests`: also hash the text, whole and per section (module docstring).
 
     A sink that fails raises a ToolError (e.g. a build failure downstream). Then, as for a grammar error, when a
     checksum is known the rest of the file is hashed first, so a mismatch, the likelier cause, is the error
     reported."""
     raw = open_stream(inp)
     layout = LINE_LAYOUT
-    text_sha, text_size = None, None
     try:
         hr = _HashingReader(raw)
         try:
             buffered = io.BufferedReader(hr, buffer_size=_READ_BUFFER)
-            gz = _decompressed(inp, buffered)
-            text = _HashingReader(gz) if text_digests else None
-            source = text or gz
-            head = source.read(_HEADER_BYTES) if text is None else _read_some(text, _HEADER_BYTES)
+            source = _decompressed(inp, buffered)
+            head = source.read(_HEADER_BYTES)
             layout = sniff_layout(head) if rules.general_reader else LINE_LAYOUT
             if layout == LINE_LAYOUT:
                 f = io.BufferedReader(_Prefixed(head, source), buffer_size=_READ_BUFFER)
-                version, counts, root = _parse(inp, f, sink, rules, text_digests)
-                if text is not None:
-                    text_sha, text_size = text.sha.hexdigest(), text.size
             else:
-                body = head + (_read_rest(text) if text is not None else source.read())
-                canonical = _canonical_text(inp.name, _load_json(inp.name, body), rules)
+                body = head + source.read()
+                lines = _canonical_text(inp.name, _load_json(inp.name, body), rules)
                 del body
-                f = io.BufferedReader(io.BytesIO(canonical), buffer_size=_READ_BUFFER)
-                version, counts, root = _parse(inp, f, sink, rules, text_digests)
-                if text_digests:
-                    text_sha, text_size = hashlib.sha256(canonical).hexdigest(), len(canonical)
+                f = io.BufferedReader(io.BytesIO(lines), buffer_size=_READ_BUFFER)
+            version, counts, root = _parse(inp, f, sink, rules)
             hr.drain()
         except (EOFError, gzip.BadGzipFile, zlib.error) as e:
             # A corrupt or cut-off download: finish hashing so a checksum mismatch, the likelier cause, is the
@@ -531,29 +516,9 @@ def stream_bundle(inp: InputFile, sink: Sink, rules: RootRules, *, text_digests:
         size=hr.size,
         schema_version=version,
         counts=counts,
-        text_sha256=text_sha,
-        text_size=text_size,
         layout=layout,
         root=tuple(root),
     )
-
-
-def _read_some(reader: _HashingReader, n: int) -> bytes:
-    buf = bytearray(n)
-    got = 0
-    while got < n:
-        m = reader.readinto(memoryview(buf)[got:])
-        if not m:
-            break
-        got += m
-    return bytes(buf[:got])
-
-
-def _read_rest(reader: _HashingReader) -> bytes:
-    out = bytearray()
-    while chunk := _read_some(reader, _READ_BUFFER):
-        out += chunk
-    return bytes(out)
 
 
 def _check_sha(inp: InputFile, sha: str, cause: str = "") -> None:
@@ -585,11 +550,8 @@ def _key_end(line: bytes) -> int:
     return -1
 
 
-def _parse(
-    inp: InputFile, f: BinaryIO, sink: Sink, rules: RootRules, text_digests: bool = False
-) -> tuple[str, dict[str, int], list[str]]:
+def _parse(inp: InputFile, f: BinaryIO, sink: Sink, rules: RootRules) -> tuple[str, dict[str, int], list[str]]:
     name = inp.name
-    sec_sha = None  # the current section's record lines, with text_digests
     lineno = 0
     section: str | None = None
     key: bytes | None = None
@@ -661,8 +623,6 @@ def _parse(
                     raise fail("the record is not a JSON object on one line")
                 if b"\t" in line or b"\r" in line:
                     raise fail("raw tab or carriage return in the line (not compact JSON)")
-                if sec_sha is not None:
-                    sec_sha.update(line)
                 write(key, record)
                 n += 1
                 state = _RECORDS
@@ -673,8 +633,6 @@ def _parse(
                     raise fail("empty section (the assembler never writes one)")
                 if comma:
                     raise fail("trailing ',' after the section's last record")
-                if sec_sha is not None:
-                    sink.section_text(section, sec_sha.hexdigest())
                 sink.close_section(section)
                 counts[section] = n
                 write = None
@@ -701,7 +659,6 @@ def _parse(
             section = sec
             root.append(sec)
             write = sink.open_section(sec)
-            sec_sha = hashlib.sha256() if text_digests else None
             n = 0
             state = _FIRST
             continue

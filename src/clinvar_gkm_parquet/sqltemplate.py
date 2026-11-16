@@ -51,8 +51,8 @@ Empty versus NULL inside typed values (design plan §3.5): an absent struct or s
 `nulls` rule. In a table with a `json` block (ADR 0005) an absent list is NULL at every depth (and an extension's
 unused list slot NULL), so `[]` is always an empty list: the round trip needs the two apart.
 
-A table with a `json` block is also checked row by row (roundtrip.checked_sql): the generic SQL carries the
-bundle line (`record`, `key_json`) and each row's columns are written back as JSON and compared with it.
+A table with a `json` block is also checked row by row, after its file is written (roundtrip.check_rows): each
+row's columns are written back as a record and compared with its bundle record by their canonical forms.
 
 That walk (the slow expression) parses each JSON value again at every level. With `{{source}}` the record is
 parsed once instead, by one json_transform into the spec types (`_t`), and each typed copy gets a fast expression
@@ -902,10 +902,6 @@ def _generic_columns(table: Table) -> tuple[Table, list[str]]:
         else:
             raise SpecError(f"table {table.name}: column {c.name}: the generic renderer has no kind {kind!r}")
         cols.append(c)
-    if table.json is not None:  # the bundle line, for the round-trip check (roundtrip.checked_sql)
-        from .roundtrip import KEY_JSON_COLUMN, RECORD_COLUMN
-
-        lines += [f"record AS {_ident(RECORD_COLUMN)}", f"key_json AS {_ident(KEY_JSON_COLUMN)}"]
     return replace(table, columns=tuple(cols)), lines
 
 
@@ -963,11 +959,6 @@ def generic_problems(table: Table) -> list[str]:
 
 def render_generic(table: Table, fast: bool = True) -> str:
     """The table's SELECT built from its spec alone: generic_template, rendered (fast=False: the slow reference).
-    A table with a `json` block also carries the round-trip check (roundtrip.checked_sql)."""
+    The build checks a table with a `json` block after writing it (roundtrip.check_rows)."""
     plain, text = generic_template(table)
-    sql = _render_text(plain, text, fast)
-    if table.json is not None:
-        from .roundtrip import checked_sql
-
-        sql = checked_sql(table, sql)
-    return sql
+    return _render_text(plain, text, fast)

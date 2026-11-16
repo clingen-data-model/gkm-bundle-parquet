@@ -47,8 +47,6 @@ class StreamedBundle:
     size: int  # compressed bytes read
     schema_version: str
     counts: dict[str, int]  # section -> records, for the sections the bundle has
-    text_sha256: str | None = None  # of the uncompressed text, when asked for (stream_bundle text_digests)
-    text_size: int | None = None  # uncompressed bytes, likewise
     layout: str = "line"  # the reader the file took: line | json (bundle.py)
     root: tuple[str, ...] = ()  # the root's members, in the order of the text
 

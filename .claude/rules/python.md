@@ -13,9 +13,9 @@ stages, and the staging format), `sources.py` (one input: a path or URL and its 
 `<file>.sha256` sidecar), `spec.py` (the compiled spec's format and its checks), `sqltemplate.py` (renders each table's SQL
 from the spec, with the macros in `sql/_macros.sql`), `select.py` (the selection engine: pointer walk and mini-bundle),
 `driver.py` (wires selection into `build` and `select`), `roundtrip.py` (rows back to bundle records: the build's
-round-trip check, `rebuild` and `verify --roundtrip`; ADR 0005), `verify.py`, `validate.py` (`validate`: every record of a
-bundle against its JSON Schema set, with the rs engine or the python reference; docs/validate.md) and `compat.py` (the
-source of `version --json`). Update this file when the layout changes.
+round-trip check, `rebuild` and `verify --roundtrip`; ADR 0005, record-identical by docs/round-trip.md), `verify.py`,
+`validate.py` (`validate`: every record of a bundle against its JSON Schema set, with the rs engine or the python
+reference; docs/validate.md) and `compat.py` (the source of `version --json`). Update this file when the layout changes.
 
 **No producer in the package** (ADR 0009): no module and no SQL file names a producer, its sections or its URLs;
 `tests/test_any_bundle.py` scans them all. **The generic core** (ADR 0006) also imports nothing outside itself, because it
@@ -23,7 +23,8 @@ is meant to move to the GKM Toolkit:
 
 - `compiler.py` compiles a table spec from a schema set and its column set; `columnset.py` loads a column set
   (`docs/column-set-format.md`); `schemas.py` loads a schema set from a file, URL or directory; `bundle.py` holds the two
-  readers behind the sink interface; `transport.py` reads bytes from a path or URL; `model.py` and `errors.py`.
+  readers behind the sink interface; `canonical.py` is a record's canonical form and the records sha256s
+  (docs/round-trip.md); `transport.py` reads bytes from a path or URL; `model.py` and `errors.py`.
 
 **The tool around it:** `compiled.py` compiles a pairing (`compile_pairing`), writes `table-spec.json` beside a build's
 manifest and reads it back; `reader_rules` gives the bundle reader the spec's `root`.

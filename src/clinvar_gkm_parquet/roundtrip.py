@@ -1,25 +1,33 @@
-"""The round trip (ADR 0005): a row back to its bundle record, and a lossless build back to its bundle text.
+"""The round trip (ADR 0005, amended by ADR 0008): a row back to its bundle record, and a lossless build back to a
+bundle with the same records.
 
-A table with a `json` block (spec.py) states how each row is written back as its bundle record, byte for byte:
-which column is which property, the key order, where pointers point. `record_sql(table)` turns that into one SQL
-expression over the table's columns. It serves twice:
+A table with a `json` block (spec.py) states how each row is written back as its bundle record: which column is
+which property, where pointers point. `record_sql(table)` turns that into one SQL expression over the table's
+columns, which writes the properties in column order. Whether two records are the same is decided by their
+canonical forms (canonical.py; docs/round-trip.md): key order, array order, string escapes, number spelling and
+whitespace don't count. It serves three times:
 
-- The build's check (`checked_sql`, called by sqltemplate.render_generic): the table's SQL also carries the
-  bundle line, and every row's record, written back from its columns, must equal it (the key's JSON text too), or
-  the build stops naming the key and the first differing character. So a record the columns can't reproduce
-  (a JSON null, a float, a key order the layout doesn't state, an escape the writer doesn't make) never makes it
-  into a lossless build.
-- `rebuild`: a full build of a `lossless` spec (sections) back to the bundle's uncompressed text,
-  section by section in the bundle schema's order, records in `ordinal` order, in the assembler's layout
-  (bundle.py). Each section's record lines are hashed as they are written and compared with the file's
-  `section_text_sha256`; the whole text with the manifest's `source_text_sha256`. Anything else stops it: a
-  spec that is not lossless, a selection, deltas, a missing table or manifest, ordinals that are not 0..n-1, a
-  pointer section outside the column's targets, a hash that differs.
+- The build's check: `source_digest` hashes every record of a section as read, then `check_rows` writes every row
+  of each table written back as a record, whose sha256 must equal its source's, or the build stops naming the key
+  and the first character where the two canonical forms differ. So a record the columns can't reproduce (a JSON
+  null, an open Range, a pointer to another section, a property no column holds) never makes it into a build. A
+  lossless build records each section's records sha256 in its file's key-value metadata (`section_records_sha256`)
+  and the bundle's records sha256 in the manifest (`records_sha256`).
+- `rebuild`: a full build of a `lossless` spec (sections) back to a bundle in the assembler's line
+  layout (bundle.py): the root members in the source's order, each section's records in `ordinal` order. It
+  recomputes every section's records sha256 and the bundle's, and compares them with the recorded ones. Anything
+  else stops it: a spec that is not lossless, a selection, deltas, a missing table or manifest, ordinals that are
+  not 0..n-1, a pointer section outside the column's targets, a records sha256 that differs.
+- `verify --roundtrip`: `rebuild` without writing; with `--full`, also against that bundle's own records sha256.
 
-The JSON text: strings by `cgp_jstr` (DuckDB's to_json with Python's lower-case \\u escapes: the producer writes
-with Python's json.dumps, ensure_ascii=False), integers as their decimal text, booleans as true/false. An object
-leaves out NULL members, so NULL is absent; a NULL list element is `null`. A single-target pointer is
-`#/<target>/<id>`; a multi-target one takes its section from the pointer-section column of the same path.
+A set built by tool 1.x records the sha256s of its text (`section_text_sha256`, `source_text_sha256`) and no
+records sha256. Its text sha256s are ignored: `rebuild` writes the set and reports the records sha256 it
+recomputed, unchecked, and `verify --roundtrip` checks it only with `--full`, against that bundle's records sha256.
+
+The JSON text: strings by `cgp_jstr` (DuckDB's to_json with lower-case \\u escapes), integers as their decimal
+text, booleans as true/false. An object leaves out NULL members, so NULL is absent; a NULL list element is `null`.
+A single-target pointer is `#/<target>/<id>`; a multi-target one takes its section from the pointer-section column
+of the same path.
 
 DuckDB pastes macro arguments into the macro body, so the expression is built here in Python and every macro it
 calls gets column references, struct fields or lambda variables only (a nested expression passed to a macro that
@@ -36,22 +44,25 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
 
-from .bundle import JSON_LAYOUT, ROOT_VALUES_TABLE
-from .errors import RoundTripError, SpecError
+from . import canonical
+from .bundle import ROOT_VALUES_TABLE
+from .canonical import EMPTY_SHA256, Hasher, failure
+from .errors import BundleFormatError, RoundTripError, SpecError
+from .model import InputFile
 from .spec import RANGE_KINDS, Column, Spec, Table
 
-RECORD_COLUMN = "__record"  # the bundle record, carried by a json table's SQL for the check
-KEY_JSON_COLUMN = "__key_json"  # the bundle key as written (its JSON text)
-LINE_COLUMN = "__line"
-_FETCH = 20_000  # rows per fetch while writing
+_FETCH = 5_000  # rows per fetch, and per batch hashed
+_WRITE = 1 << 20  # text buffered before each write
 _PROPERTY_PATH = re.compile(r"\$\.(\w+)(?:\[\*\])?")
 _INTEGERS = ("bigint", "integer", "smallint", "tinyint", "hugeint", "ubigint", "uinteger", "usmallint", "utinyint")
+_MIN_CSV_BUFFER = 1 << 20
+RECORD_IDENTICAL = "record-identical"  # what a lossless build promises (manifest round_trip.promise)
 
 
 def _ident(s: str) -> str:
@@ -60,10 +71,6 @@ def _ident(s: str) -> str:
 
 def _lit(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
-
-
-def _key_bytes(k: str) -> bytes:
-    return k.encode("utf-8")
 
 
 # --- one row back to its record --------------------------------------------------------------------------------
@@ -92,23 +99,21 @@ class _Writer:
 
     # values -----------------------------------------------------------------------------------------------------
 
-    def obj(self, parts: list[tuple[str, str]], sort: bool) -> str:
-        if sort:
-            parts = sorted(parts, key=lambda p: _key_bytes(p[0]))
+    def obj(self, parts: list[tuple[str, str]]) -> str:
         names = [n for n, _ in parts]
         if len(set(names)) != len(names):
             raise SpecError(f"table {self.table.name}: two members named alike in {names}")
         members = ", ".join(f"{_lit(json.dumps(n, ensure_ascii=False) + ':')} || {v}" for n, v in parts)
         return f"'{{' || concat_ws(',', {members}) || '}}'"
 
-    def value(self, x: str, t, rel: str, c: Column, sort: bool, ptrs: dict[str, tuple[str, ...]]) -> str:
+    def value(self, x: str, t, rel: str, c: Column, ptrs: dict[str, tuple[str, ...]]) -> str:
         """JSON text of x, of DuckDB type t, at position rel of column c's value (NULL stays NULL)."""
         tid = t.id
         if tid == "struct":
-            return f"CASE WHEN {x} IS NULL THEN NULL ELSE {self.struct(x, t, rel, c, sort, ptrs)} END"
+            return f"CASE WHEN {x} IS NULL THEN NULL ELSE {self.struct(x, t, rel, c, ptrs)} END"
         if tid == "list":
             e = self.var()
-            elem = self.value(e, t.children[0][1], f"{rel}[]", c, sort, ptrs)
+            elem = self.value(e, t.children[0][1], f"{rel}[]", c, ptrs)
             return (
                 f"CASE WHEN {x} IS NULL THEN NULL ELSE '[' || array_to_string(list_transform({x}, "
                 f"lambda {e}: coalesce({elem}, 'null')), ',') || ']' END"
@@ -134,7 +139,7 @@ class _Writer:
             "(the round trip writes VARCHAR, integers, DOUBLE and BOOLEAN)"
         )
 
-    def struct(self, x: str, t, rel: str, c: Column, sort: bool, ptrs) -> str:
+    def struct(self, x: str, t, rel: str, c: Column, ptrs) -> str:
         fields = list(t.children)
         names = [f for f, _ in fields]
         slots = [(f, ft) for f, ft in fields if f.startswith("value_")]
@@ -145,7 +150,7 @@ class _Writer:
                     f"table {self.table.name}: column {c.name}: the round trip needs json-type extension slots "
                     "(with slots by name, the value's JSON kind is not known)"
                 )
-            values = [self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, sort, ptrs) for f, ft in slots]
+            values = [self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, ptrs) for f, ft in slots]
             # Every slot NULL: the value was [] (an empty array fills no slot; a null or absent value stops the
             # build), possible only where the struct has an array slot.
             if any(ft.id == "list" for _, ft in slots):
@@ -154,11 +159,11 @@ class _Writer:
                 if f == slots[0][0]:
                     parts.append(("value", f"coalesce({', '.join(values)})"))
                 elif not f.startswith("value_"):
-                    parts.append((f, self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, sort, ptrs)))
+                    parts.append((f, self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, ptrs)))
         else:
             for f, ft in fields:
-                parts.append((f, self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, sort, ptrs)))
-        return self.obj(parts, sort)
+                parts.append((f, self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, ptrs)))
+        return self.obj(parts)
 
     # the record -------------------------------------------------------------------------------------------------
 
@@ -166,7 +171,6 @@ class _Writer:
         from .sqltemplate import _parse_type
 
         table, layout = self.table, self.table.json
-        sort_all = layout.key_order == "sorted"
         sections = {c.derivation.path: c for c in table.columns_of("pointer-section")}
         used_sections: set[str] = set()
         ranges: dict[str, dict[str, Column]] = {}
@@ -187,7 +191,6 @@ class _Writer:
             if not m:
                 raise SpecError(f"{where}: the round trip needs a top-level path ($.<field>), not {path}")
             prop = m.group(1)
-            sort = sort_all or c.name in layout.sorted_columns
             t = _parse_type(c.type)
             if kind in RANGE_KINDS:
                 group = ranges[path]
@@ -211,7 +214,7 @@ class _Writer:
             if c.nulls != "when-absent":
                 raise SpecError(f"{where}: the round trip needs nulls: when-absent (NULL = absent)")
             if kind == "scalar-path":
-                parts.append((prop, self.value(self.ref(c.name), t, "", c, sort, {})))
+                parts.append((prop, self.value(self.ref(c.name), t, "", c, {})))
             elif kind == "json-text":
                 parts.append((prop, self.ref(c.name)))
             elif kind == "bare-id":
@@ -221,7 +224,7 @@ class _Writer:
                 if d.pointers and not d.pointer_targets:
                     raise SpecError(f"{where}: pointers need their target sections ({{position: [sections]}})")
                 ptrs = {p.replace("[*]", "[]"): ts for p, ts in zip(d.pointers, d.pointer_targets, strict=True)}
-                parts.append((prop, self.value(self.ref(c.name), t, "", c, sort, ptrs)))
+                parts.append((prop, self.value(self.ref(c.name), t, "", c, ptrs)))
             else:
                 raise SpecError(f"{where}: the round trip can't write back a {kind} column")
         unused = sorted(set(sections) - used_sections)
@@ -230,7 +233,7 @@ class _Writer:
                 f"table {table.name}: pointer-section column(s) of path(s) {unused} have no multi-target bare-id "
                 "column of the same path"
             )
-        return self.obj(parts, sort_all)
+        return self.obj(parts)
 
     def bare_id(self, c: Column, t, sections: dict[str, Column], used: set[str]) -> str:
         targets = c.derivation.targets
@@ -279,30 +282,9 @@ def record_sql(table: Table, ref: Callable[[str], str] = _ident) -> str:
     return _Writer(table, ref).record()
 
 
-def line_sql(table: Table, ref: Callable[[str], str] = _ident) -> str:
-    """The SQL of the row's record line as the bundle writes it, without the indent and the trailing comma:
-    `"<key>": <record>`."""
-    w = _Writer(table, ref)
-    return f"{'cgp_jstr(' + w.key + ')'} || ': ' || {w.record()}"
-
-
-def checked_sql(table: Table, sql: str) -> str:
-    """The table's SQL (with RECORD_COLUMN and KEY_JSON_COLUMN) wrapped in the round-trip check: every row's line
-    written back must equal the bundle line, else the build stops. The output columns are the table's."""
-    key = _ident(table.columns_of("key")[0].name)
-    line, orig = _ident(LINE_COLUMN), f"{_ident(KEY_JSON_COLUMN)} || ': ' || {_ident(RECORD_COLUMN)}"
-    hidden = ", ".join(_ident(c) for c in (RECORD_COLUMN, KEY_JSON_COLUMN, LINE_COLUMN))
-    ctx = _lit(f"table {table.name}: round trip")
-    return (
-        f"SELECT * EXCLUDE ({hidden}) FROM (\n"
-        f"SELECT *, {line_sql(table)} AS {line} FROM (\n{sql}\n) AS __rt\n) AS __rc\n"
-        f"WHERE CASE WHEN {line} = {orig} THEN TRUE ELSE cgp_roundtrip_fail({ctx}, {key}, {line}, {orig}) END"
-    )
-
-
 def lossless_problems(spec: Spec) -> list[str]:
     """What keeps the spec's tables from being written back (every table with a json block), and, for a
-    `lossless` spec, from being a lossless encoding of the bundle text (spec.py). Empty: nothing."""
+    `lossless` spec, from encoding every record of the bundle (spec.py). Empty: nothing."""
     out: list[str] = []
     for t in spec.tables:
         if t.json is None:
@@ -311,9 +293,6 @@ def lossless_problems(spec: Spec) -> list[str]:
             record_sql(t)
         except SpecError as e:
             out.append(str(e))
-        for c in t.columns:
-            if c.name in (RECORD_COLUMN, KEY_JSON_COLUMN, LINE_COLUMN):
-                out.append(f"table {t.name}: column name {c.name} is reserved for the round-trip check")
     if not spec.lossless:
         return out
     have = [s for t in spec.tables for s in t.sections]
@@ -334,46 +313,259 @@ def lossless_problems(spec: Spec) -> list[str]:
     return out
 
 
-# --- a build back to its bundle text ---------------------------------------------------------------------------
+# --- records sha256s -------------------------------------------------------------------------------------------
 
 
-BYTE_IDENTICAL, JSON_EQUAL = "byte-identical", "json-equal"
+class _Lines:
+    """A section's lines `<key> TAB <record sha256>` (canonical.key_line), written unsorted to a file in `work`.
+    `finish` sorts them (DuckDB, spilling to disk) and hashes them in that order, which it checks: a key twice, or
+    an order that isn't UTF-8 byte order, stops it."""
 
+    def __init__(self, work: Path, where: str):
+        work.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix="records-", suffix=".tsv", dir=work)
+        self.path = Path(name)
+        self._fh = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        self.where = where
+        self.n = 0
+        self.max_line = 0
 
-def promise_of(layout: str) -> str:
-    """What a lossless build promises about the text `rebuild` writes, by the layout its source was in."""
-    return JSON_EQUAL if layout == JSON_LAYOUT else BYTE_IDENTICAL
+    def add(self, key: str, sha: str) -> None:
+        line = canonical.key_line(key, sha) + "\n"
+        self._fh.write(line)
+        self.n += 1
+        if len(line) > self.max_line:
+            self.max_line = len(line)
 
-
-def promise_text(promise: str) -> str:
-    if promise == JSON_EQUAL:
+    def _source(self) -> str:
+        max_line = 4 * self.max_line + 1024  # bytes; a character is at most 4
         return (
-            "JSON-equal to the source, whose layout was not kept: the build read it with every key sorted, and "
-            "this is the canonical line layout of that"
+            f"read_csv({_lit(str(self.path))}, delim='\t', quote='', escape='', header=false, auto_detect=false, "
+            f"new_line='\\n', strict_mode=true, columns={{'k': 'VARCHAR', 'sha': 'VARCHAR'}}, "
+            f"max_line_size={max_line}, buffer_size={max(_MIN_CSV_BUFFER, 2 * max_line)})"
         )
-    return "the source's uncompressed text, byte for byte"
+
+    def finish(self, con: duckdb.DuckDBPyConnection, table: str | None = None) -> str:
+        """The records sha256 of the lines; with `table`, also a temporary table of (key, sha), the key decoded."""
+        self._fh.close()
+        if not self.n:
+            if table is not None:
+                con.execute(f"CREATE OR REPLACE TEMP TABLE {_ident(table)} (key VARCHAR, sha VARCHAR)")
+            return EMPTY_SHA256
+        h = hashlib.sha256()
+        prev, seen = None, 0
+        try:
+            rel = con.sql(f"SELECT k, sha FROM {self._source()} ORDER BY k")
+            while batch := rel.fetchmany(_FETCH):
+                for k, sha in batch:
+                    if prev is not None and k <= prev:
+                        raise RoundTripError(f"{self.where}: key {k} {'twice' if k == prev else 'out of order'}")
+                    h.update(f"{k}\t{sha}\n".encode())
+                    prev = k
+                seen += len(batch)
+            if table is not None:
+                con.execute(
+                    f"CREATE OR REPLACE TEMP TABLE {_ident(table)} AS "
+                    f"SELECT json_extract_string(k, '$') AS key, sha FROM {self._source()}"
+                )
+        except duckdb.Error as e:
+            raise RoundTripError(f"{self.where}: the records sha256: {e}") from e
+        if seen != self.n:
+            raise RoundTripError(f"{self.where}: {self.n} lines written, {seen} read back")
+        return h.hexdigest()
+
+    def discard(self) -> None:
+        self._fh.close()
+        self.path.unlink(missing_ok=True)
+
+
+def _hashed(
+    con: duckdb.DuckDBPyConnection, sql: str, hasher: Hasher, text_at: int, where: str
+) -> Iterator[tuple[tuple, str]]:
+    """(row, the record sha256 of its column `text_at`) for each row of `sql`, in order; the sha256 is a
+    canonical.failure mark for a text with no canonical form. A query that fails raises RoundTripError."""
+    try:
+        rel = con.sql(sql)
+    except duckdb.Error as e:
+        raise RoundTripError(f"{where}: {e}") from e
+
+    def batches():
+        while True:
+            try:
+                rows = rel.fetchmany(_FETCH)
+            except duckdb.Error as e:
+                raise RoundTripError(f"{where}: {e}") from e
+            if not rows:
+                return
+            yield rows, [r[text_at] for r in rows]
+
+    for rows, shas in hasher.map(batches()):
+        yield from zip(rows, shas, strict=True)
+
+
+@dataclass
+class SectionDigest:
+    section: str
+    sha256: str  # the section's records sha256
+    records: int
+    table: str | None  # a temporary table of (key, record sha256), for check_rows
+
+
+def source_digest(
+    con: duckdb.DuckDBPyConnection, section: str, hasher: Hasher, work: Path, *, keep: bool
+) -> SectionDigest:
+    """Every record of `bundle_<section>` (build.load_section) hashed: the section's records sha256 and, with
+    `keep`, a temporary table of each key's record sha256 for check_rows. A record with no canonical form stops
+    it."""
+    from .build import bundle_table
+
+    where = f"section {section}"
+    lines = _Lines(work, where)
+    try:
+        sql = f"SELECT key, record FROM {bundle_table(section)}"
+        for (key, _), sha in _hashed(con, sql, hasher, 1, where):
+            why = failure(sha)
+            if why is not None:
+                raise BundleFormatError(f"{where}, key {key}: the record has no canonical form: {why}")
+            lines.add(key, sha)
+        table = f"__records_{section}" if keep else None
+        return SectionDigest(section, lines.finish(con, table), lines.n, table)
+    finally:
+        lines.discard()
+
+
+def check_rows(
+    con: duckdb.DuckDBPyConnection, table: Table, path: Path, digest: SectionDigest, hasher: Hasher
+) -> None:
+    """The build's check of a written file: every row, written back as a record, has its source record's sha256
+    (`digest`, kept by source_digest). The first that doesn't stops the build, naming the key."""
+    key = _ident(table.columns_of("key")[0].name)
+    sql = (
+        f"SELECT r.__k, r.__rec, s.sha FROM (SELECT {key} AS __k, {record_sql(table)} AS __rec "
+        f"FROM read_parquet({_lit(str(path))})) r LEFT JOIN {_ident(digest.table)} s ON s.key = r.__k"
+    )
+    for (k, rec, want), got in _hashed(con, sql, hasher, 1, f"table {table.name}: round trip"):
+        if got != want:
+            raise RoundTripError(_difference(con, table, k, rec, want, got))
+
+
+def _difference(con, table: Table, key: str, rec: str | None, want: str | None, got: str) -> str:
+    from .build import bundle_table
+
+    where = f"table {table.name}: round trip: key {key}"
+    if want is None:
+        return f"{where}: the row has no bundle record"
+    why = failure(got)
+    if why is not None:
+        return f"{where}: the record written back from the row has no canonical form: {why}"
+    src = con.execute(f"SELECT record FROM {bundle_table(table.sections[0])} WHERE key = ?", [key]).fetchone()[0]
+    a, b = canonical.canonical_text(rec), canonical.canonical_text(src)
+    i = next((i for i, (x, y) in enumerate(zip(a, b, strict=False)) if x != y), min(len(a), len(b)))
+    lo = max(i - 60, 0)
+    return (
+        f"{where}: the record written back from the row differs from the bundle record at character {i + 1} of "
+        f"their canonical forms: rebuilt ...{a[lo : i + 60]}... bundle ...{b[lo : i + 60]}..."
+    )
+
+
+def root_members(
+    order: list[str] | tuple[str, ...],
+    version_property: str | None,
+    version: str,
+    values: dict[str, str | bytes],
+    sections: set[str],
+) -> list[tuple[str, str | bytes | None]]:
+    """The root's members for canonical.root_sha256, from its order: the version, a section (None) or a value."""
+    out: list[tuple[str, str | bytes | None]] = []
+    for name in order:
+        if name == version_property:
+            out.append((name, json.dumps(version, ensure_ascii=False)))
+        elif name in sections:
+            out.append((name, None))
+        elif name in values:
+            out.append((name, values[name]))
+        else:
+            raise RoundTripError(f"root member {name!r}: no value holds it")
+    return out
+
+
+@dataclass
+class BundleRecords:
+    """A bundle's records sha256s, read from the bundle itself (`verify --roundtrip --full`)."""
+
+    sha256: str  # of the compressed file
+    sections: dict[str, str]  # section -> records sha256
+    root_sha256: str
+    records_sha256: str
+
+
+def bundle_records(
+    inp: InputFile,
+    spec: Spec,
+    work: Path,
+    hasher: Hasher,
+    *,
+    memory_limit: str | None = None,
+    threads: int | None = None,
+) -> BundleRecords:
+    """Stream a bundle once (build.SectionPipeline) and take its records sha256s, as a build of it records them."""
+    from .build import SectionPipeline
+    from .model import BuildInputs
+
+    shas: dict[str, str] = {}
+
+    def process(con: duckdb.DuckDBPyConnection, section: str, rows: int) -> None:
+        shas[section] = source_digest(con, section, hasher, work / "records", keep=False).sha256
+
+    pipe = SectionPipeline(
+        BuildInputs(full=inp),
+        spec,
+        work,
+        process=process,
+        needed=None,
+        memory_limit=memory_limit,
+        threads=threads,
+    )
+    state = pipe.run()
+    members = root_members(
+        state.full.root,
+        pipe.rules.version_property,
+        state.full.schema_version,
+        pipe.root_values,
+        set(pipe.sections),
+    )
+    root = canonical.root_sha256(members)
+    return BundleRecords(state.full.sha256, shas, root, canonical.records_sha256(shas, root))
+
+
+# --- a build back to its bundle -------------------------------------------------------------------------------
 
 
 @dataclass
 class RebuildResult:
-    out: Path | None  # None: the text was hashed, not written
+    out: Path | None  # None: the records were hashed, not written
     schema_version: str
-    text_sha256: str
+    records_sha256: str
+    expected_records_sha256: str | None  # the manifest's; None for a set built by tool 1.x, which records none
     text_size: int
-    expected_text_sha256: str  # the manifest's source_text_sha256
+    root_sha256: str = ""
     sections: dict[str, int] = field(default_factory=dict)  # section -> records written
-    promise: str = BYTE_IDENTICAL  # what the text is to the source (manifest round_trip.promise)
+    section_records: dict[str, str] = field(default_factory=dict)  # section -> its records sha256, as rebuilt
+    tool_version: str = ""  # of the build
+
+    @property
+    def checked(self) -> bool:
+        return self.expected_records_sha256 is not None
 
 
 class RoundTripMismatch(RoundTripError):
-    """The rebuilt text differs from the recorded one: a section's sha256, or the whole text's."""
+    """The rebuilt records differ from the recorded ones: a section's records sha256, or the bundle's."""
 
 
 class _Out:
-    """Where the text goes: a file (gzip when the name ends in .gz), or nowhere; hashed either way."""
+    """Where the text goes: a file (gzip when the name ends in .gz), or nowhere; counted either way."""
 
     def __init__(self, path: Path | None, compresslevel: int, gz: bool):
-        self.sha = hashlib.sha256()
         self.size = 0
         self._fh = self._gz = None
         if path is not None:
@@ -384,7 +576,6 @@ class _Out:
                 )
 
     def write(self, b: bytes) -> None:
-        self.sha.update(b)
         self.size += len(b)
         if self._gz is not None:
             self._gz.write(b)
@@ -407,6 +598,14 @@ def _shared_kv(kvs: dict[str, dict[str, str]], key: str) -> str | None:
     return values.pop()
 
 
+def built_by_1x(kvs: dict[str, dict[str, str]]) -> bool:
+    """The files are a lossless build by tool 1.x: each carries its section's text sha256 and none its records
+    sha256."""
+    return bool(kvs) and all(
+        "section_text_sha256" in kv and "section_records_sha256" not in kv for kv in kvs.values()
+    )
+
+
 def rebuild(
     out_dir: Path,
     out: Path | None = None,
@@ -415,12 +614,13 @@ def rebuild(
     threads: int | None = None,
     work_dir: Path | None = None,
     compresslevel: int = 6,
+    workers: int | None = None,
     log: Callable[[str], None] | None = None,
 ) -> RebuildResult:
-    """Write the bundle a full lossless build was made from (`out`, gzip when it ends in .gz; None: hash only)
-    and check it against the recorded sha256s (module docstring). Returns what was written; raises
-    RoundTripError (RoundTripMismatch for a differing text) and leaves no output file on any failure."""
-    from .build import EMPTY_SHA256, MANIFEST_NAME, configure
+    """Write the bundle a full lossless build was made from (`out`, gzip when it ends in .gz; None: hash only) and
+    check its records sha256s against the recorded ones (module docstring). Returns what was written; raises
+    RoundTripError (RoundTripMismatch for differing records) and leaves no output file on any failure."""
+    from .build import MANIFEST_NAME, configure
     from .sqltemplate import macros_sql
     from .verify import dir_kv, spec_for_dir
 
@@ -436,7 +636,7 @@ def rebuild(
         meta.close()
     if not spec.lossless:
         raise RoundTripError(
-            f"{out_dir}: written by table spec {spec.label}, which is not a lossless encoding of the bundle "
+            f"{out_dir}: written by table spec {spec.label}, which doesn't encode every record of the bundle "
             "(lossless: true); only a full build of such a spec (sections) can be rebuilt"
         )
     files = {name[: -len(".parquet")]: out_dir / name for name in kvs}
@@ -452,13 +652,14 @@ def rebuild(
         raise RoundTripError(f"{out_dir}: a selective build (clinvar_gkm_parquet.selection) is not a whole bundle")
     if _shared_kv(kvs, "source_deltas") != "[]":
         raise RoundTripError(
-            f"{out_dir}: built by 1.x with deltas replayed: the tables hold a state no one bundle text holds"
+            f"{out_dir}: built by 1.x with deltas replayed: the tables hold a state no one bundle holds"
         )
-    no_text = [n for n, kv in kvs.items() if "section_text_sha256" not in kv]
-    if no_text:
+    legacy = built_by_1x(kvs)
+    unrecorded = [n for n, kv in kvs.items() if "section_records_sha256" not in kv]
+    if unrecorded and not legacy:
         raise RoundTripError(
-            f"{out_dir}: {', '.join(sorted(no_text)[:5])} carry no clinvar_gkm_parquet.section_text_sha256: not "
-            "a lossless build (a selection or a build with deltas records none)"
+            f"{out_dir}: {', '.join(sorted(unrecorded)[:5])} carry no clinvar_gkm_parquet.section_records_sha256: "
+            "not a lossless build (a selection or a build with deltas records none)"
         )
     for k in ("tool_version", "table_spec", "table_spec_version", "bundle_schema_version", "source_bundle_sha256"):
         _shared_kv(kvs, k)
@@ -468,16 +669,14 @@ def rebuild(
     sections = tuple(s for t in spec.tables for s in t.sections)
     manifest_path = out_dir / MANIFEST_NAME
     if not manifest_path.exists():
-        raise RoundTripError(
-            f"{manifest_path}: missing; a rebuild checks the whole text against its source_text_sha256"
-        )
+        raise RoundTripError(f"{manifest_path}: missing; a rebuild checks the bundle against its records_sha256")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except ValueError as e:
         raise RoundTripError(f"{manifest_path}: unreadable manifest ({e})") from e
-    expected_text = manifest.get("source_text_sha256")
-    if expected_text is None:
-        raise RoundTripError(f"{manifest_path}: no source_text_sha256, but the files are a lossless build")
+    expected = None if legacy else manifest.get("records_sha256")
+    if expected is None and not legacy:
+        raise RoundTripError(f"{manifest_path}: no records_sha256, but the files are a lossless build")
     if manifest.get("source_bundle_sha256") != _shared_kv(kvs, "source_bundle_sha256"):
         raise RoundTripError(f"{manifest_path}: source_bundle_sha256 differs from the files'")
     recorded = manifest.get("table_spec") or {}
@@ -493,8 +692,7 @@ def rebuild(
             )
 
     root_order = manifest.get("source_root")
-    promise = (manifest.get("round_trip") or {}).get("promise")
-    if not isinstance(root_order, list) or promise not in (BYTE_IDENTICAL, JSON_EQUAL):
+    if not isinstance(root_order, list) or not isinstance(manifest.get("round_trip"), dict):
         raise RoundTripError(f"{manifest_path}: no source_root and round_trip: not a lossless build's manifest")
 
     tmp = None
@@ -507,46 +705,39 @@ def rebuild(
         Path(work_dir).mkdir(parents=True, exist_ok=True)  # as the bundle recompute makes it
     spill = Path(tempfile.mkdtemp(prefix="clinvar-gkm-parquet-rebuild-", dir=work_dir))
     con = duckdb.connect()
+    hasher = Hasher(workers)
     try:
         configure(con, memory_limit=memory_limit, threads=threads, temp_directory=spill)
         con.execute(macros_sql())
         by_section = {t.sections[0]: t for t in spec.tables}
         rows = {s: _open_table(con, by_section[s], files[by_section[s].name], spec) for s in sections}
-        for s in sections:
-            if not rows[s] and kvs[files[by_section[s].name].name]["section_text_sha256"] != EMPTY_SHA256:
-                raise RoundTripMismatch(f"section {s}: no rows, but the build recorded a non-empty section text")
         present = [s for s in sections if rows[s]]
         stray = [s for s in present if s not in root_order]
         if stray:
             raise RoundTripError(
                 f"{manifest_path}: section(s) {stray} have rows, but source_root doesn't list them"
             )
-        want = {s: kvs[files[by_section[s].name].name]["section_text_sha256"] for s in present}
         values = _root_values(con, root_values_file)
         version_property = spec.root.version_property
-        members = []
-        for member in root_order:
-            if member == version_property:
-                members.append(("value", member, json.dumps(version, ensure_ascii=False)))
-            elif member in by_section:
-                s = member
-                members.append(("section", s, by_section[s], rows[s], want.get(s)))
-            elif member in values:
-                members.append(("value", member, values.pop(member)))
-            else:
-                raise RoundTripError(f"{manifest_path}: source_root names {member!r}, and no file holds it")
-        if values:
-            raise RoundTripError(f"{manifest_path}: root value(s) {sorted(values)} are not in source_root")
+        members = root_members(root_order, version_property, version, values, set(by_section))
+        unused = sorted(set(values) - set(root_order))
+        if unused:
+            raise RoundTripError(f"{manifest_path}: root value(s) {unused} are not in source_root")
+        want = {
+            s: None if legacy else kvs[files[t.name].name]["section_records_sha256"] for s, t in by_section.items()
+        }
         sink = _Out(tmp, compresslevel, gz=out is not None and out.name.endswith(".gz"))
         ok = False
         try:
-            _write_text(con, sink, members, log)
-            sink.close()
-            got = sink.sha.hexdigest()
-            if got != expected_text:
+            digests = _write(con, sink, members, by_section, rows, want, hasher, spill / "records", log)
+            root = canonical.root_sha256(members)
+            got = canonical.records_sha256(digests, root)
+            if expected is not None and got != expected:
                 raise RoundTripMismatch(
-                    f"the rebuilt text has sha256 {got}, the manifest records source_text_sha256 {expected_text}"
+                    f"the rebuilt bundle has records sha256 {got}, the manifest records records_sha256 {expected}"
+                    " (every section's records sha256 matches, so its root differs)"
                 )
+            sink.close()
             if tmp is not None:
                 os.replace(tmp, out)
             ok = True
@@ -559,39 +750,20 @@ def rebuild(
                 if tmp is not None:
                     tmp.unlink(missing_ok=True)
     finally:
+        hasher.close()
         con.close()
         shutil.rmtree(spill, ignore_errors=True)
     return RebuildResult(
         out=out,
         schema_version=version,
-        text_sha256=sink.sha.hexdigest(),
+        records_sha256=got,
+        expected_records_sha256=expected,
         text_size=sink.size,
-        expected_text_sha256=expected_text,
+        root_sha256=root,
         sections={s: rows[s] for s in present},
-        promise=promise,
+        section_records=digests,
+        tool_version=_shared_kv(kvs, "tool_version") or "?",
     )
-
-
-class _TextSink:
-    """A bundle.stream_bundle sink that only takes the text digests."""
-
-    def __init__(self):
-        self.sections: dict[str, str] = {}
-
-    def begin(self, schema_version: str) -> None:
-        pass
-
-    def open_section(self, section: str):
-        return lambda key, record: None
-
-    def section_text(self, section: str, sha256: str) -> None:
-        self.sections[section] = sha256
-
-    def close_section(self, section: str) -> None:
-        pass
-
-    def root_value(self, name: str, value: bytes) -> None:
-        pass
 
 
 def _root_values(con: duckdb.DuckDBPyConnection, path: Path | None) -> dict[str, str]:
@@ -622,60 +794,78 @@ def _open_table(con: duckdb.DuckDBPyConnection, t: Table, path: Path, spec: Spec
     return n
 
 
-def _write_text(con, sink: _Out, members: list[tuple], log) -> None:
-    """The bundle text in the line layout (bundle.py), its root members in order: ("value", name, JSON text), or
-    ("section", name, table, rows, recorded sha256). Each section's record lines are hashed as written and compared
-    with the recorded hash; a section with no rows is `{}`."""
+def _write(
+    con,
+    sink: _Out,
+    members: list[tuple],
+    by_section: dict[str, Table],
+    rows: dict[str, int],
+    want: dict[str, str | None],
+    hasher: Hasher,
+    work: Path,
+    log,
+) -> dict[str, str]:
+    """The bundle text in the line layout (bundle.py), its root members in order; returns each section's records
+    sha256, compared with the recorded one (`want`, None: nothing recorded) as soon as the section is written. A
+    section with no rows is `{}`."""
     sink.write(b"{\n")
-    for i, member in enumerate(members):
+    digests: dict[str, str] = {}
+    for i, (name, text) in enumerate(members):
         end = b",\n" if i < len(members) - 1 else b"\n"
-        name = json.dumps(member[1], ensure_ascii=False).encode()
-        if member[0] == "value":
-            sink.write(b"  " + name + b": " + member[2].encode("utf-8") + end)
+        quoted = json.dumps(name, ensure_ascii=False).encode()
+        if text is not None:
+            sink.write(b"  " + quoted + b": " + (text if isinstance(text, bytes) else text.encode("utf-8")) + end)
             continue
-        _, section, t, n, want = member
+        t, n = by_section[name], rows[name]
         if not n:
-            sink.write(b"  " + name + b": {}" + end)
-            continue
-        log(f"section {section}: {n} records")
-        sink.write(b"  " + name + b": {\n")
-        sec = hashlib.sha256()
-        first, written = True, 0
-        for lines in _record_lines(con, t):
-            b = (("" if first else ",\n") + ",\n".join(lines)).encode("utf-8")
-            first = False
-            sec.update(b)
-            sink.write(b)
-            written += len(lines)
-        sec.update(b"\n")
-        sink.write(b"\n")
+            sink.write(b"  " + quoted + b": {}" + end)
+            digests[name] = EMPTY_SHA256
+        else:
+            log(f"section {name}: {n} records")
+            sink.write(b"  " + quoted + b": {\n")
+            digests[name] = _write_section(con, sink, t, n, hasher, work)
+            sink.write(b"\n  }" + end)
+        if want.get(name) is not None and digests[name] != want[name]:
+            raise RoundTripMismatch(
+                f"section {name}: the rebuilt records have records sha256 {digests[name]}, the build recorded "
+                f"{want[name]}"
+            )
+    sink.write(b"}\n")
+    return digests
+
+
+def _write_section(con, sink: _Out, t: Table, n: int, hasher: Hasher, work: Path) -> str:
+    """The table's record lines (indented, `,` between them) in ordinal order, each hashed; returns the section's
+    records sha256. A failing row (a pointer section outside the column's targets) stops it."""
+    key = _ident(t.columns_of("key")[0].name)
+    order = _ident(t.columns_of("ordinal")[0].name)
+    sql = f"SELECT {key}, {record_sql(t)} FROM {_ident(t.name)} ORDER BY {order}"
+    lines = _Lines(work, f"table {t.name}")
+    buf: list[str] = []
+    size, written = 0, 0
+    try:
+        for (k, rec), sha in _hashed(con, sql, hasher, 1, f"table {t.name}"):
+            if k is None or rec is None:
+                raise RoundTripError(f"table {t.name}: a row wrote no record (a NULL key?)")
+            why = failure(sha)
+            if why is not None:
+                raise RoundTripError(
+                    f"table {t.name}: key {k}: the record written back has no canonical form: {why}"
+                )
+            lines.add(k, sha)
+            line = ("    " if not written else ",\n    ") + canonical.string(k) + ": " + rec
+            buf.append(line)
+            size += len(line)
+            written += 1
+            if size >= _WRITE:
+                sink.write("".join(buf).encode("utf-8"))
+                buf, size = [], 0
+        sink.write("".join(buf).encode("utf-8"))
         if written != n:
             raise RoundTripError(f"table {t.name}: wrote {written} records of {n}")
-        if sec.hexdigest() != want:
-            raise RoundTripMismatch(
-                f"section {section}: the rebuilt record lines have sha256 {sec.hexdigest()}, the build "
-                f"recorded {want}"
-            )
-        sink.write(b"  }" + end)
-    sink.write(b"}\n")
-
-
-def _record_lines(con: duckdb.DuckDBPyConnection, t: Table):
-    """The table's record lines (indented, no comma) in ordinal order, in batches. A failing row (a pointer
-    section outside the column's targets) stops it."""
-    order = _ident(t.columns_of("ordinal")[0].name)
-    try:
-        rel = con.sql(f"SELECT '    ' || ({line_sql(t)}) FROM {_ident(t.name)} ORDER BY {order}")
-        while True:
-            batch = rel.fetchmany(_FETCH)
-            if not batch:
-                return
-            lines = [r[0] for r in batch]
-            if None in lines:
-                raise RoundTripError(f"table {t.name}: a row wrote no line (a NULL key?)")
-            yield lines
-    except duckdb.Error as e:
-        raise RoundTripError(f"table {t.name}: {e}") from e
+        return lines.finish(con)
+    finally:
+        lines.discard()
 
 
 def verify_roundtrip(
@@ -686,47 +876,75 @@ def verify_roundtrip(
     memory_limit: str | None = None,
     threads: int | None = None,
     work_dir: Path | None = None,
+    workers: int | None = None,
 ) -> dict:
-    """`verify --roundtrip`: rebuild the text without writing it and compare it with the recorded sha256s (a
-    mismatch is a difference, not an error); with `full`, also with that bundle's uncompressed text (its
-    compressed sha256 must be the files' source_bundle_sha256). Refusals (not a lossless build) raise."""
-    from . import bundle, sources
-    from .compiled import reader_rules
+    """`verify --roundtrip`: rebuild the records without writing them and compare their records sha256s with the
+    recorded ones (a mismatch is a difference, not an error); with `full`, also with that bundle's own (its
+    compressed sha256 must be the files' source_bundle_sha256). A set built by tool 1.x records none, so it needs
+    `full`. Refusals (not a lossless build) raise."""
+    from . import sources
     from .verify import dir_kv, spec_for_dir
 
-    out: dict = {"passed": False, "problems": [], "checked": [], "text_sha256": None, "text_size": None}
-    out["promise"] = None
+    out: dict = {"passed": False, "problems": [], "checked": [], "records_sha256": None, "text_size": None}
+    out["promise"] = RECORD_IDENTICAL
+    con = duckdb.connect()
     try:
-        r = rebuild(out_dir, None, memory_limit=memory_limit, threads=threads, work_dir=work_dir)
+        kvs = dir_kv(con, Path(out_dir))
+    finally:
+        con.close()
+    kvs = {n: kv for n, kv in kvs.items() if n != f"{ROOT_VALUES_TABLE}.parquet"}
+    if built_by_1x(kvs) and full is None:
+        tool = _shared_kv(kvs, "tool_version")
+        raise RoundTripError(
+            f"{out_dir}: built by tool {tool}, which records the sha256 of its text and no records sha256: give "
+            "--full <the bundle it was built from> to check its round trip"
+        )
+    try:
+        r = rebuild(
+            out_dir,
+            None,
+            memory_limit=memory_limit,
+            threads=threads,
+            work_dir=work_dir,
+            workers=workers,
+        )
     except RoundTripMismatch as e:
         out["problems"].append(str(e))
         return out
-    out.update(text_sha256=r.text_sha256, text_size=r.text_size, sections=r.sections, promise=r.promise)
-    out["checked"].append("every section's section_text_sha256")
-    out["checked"].append("the manifest's source_text_sha256")
+    out.update(records_sha256=r.records_sha256, text_size=r.text_size, sections=r.sections)
+    if r.checked:
+        out["checked"] += ["every section's section_records_sha256", "the manifest's records_sha256"]
     if full is not None:
-        con = duckdb.connect()
-        try:
-            recorded = _shared_kv(dir_kv(con, Path(out_dir)), "source_bundle_sha256")
-        finally:
-            con.close()
+        recorded = _shared_kv(kvs, "source_bundle_sha256")
         inp = sources.resolve_input(full, sha256=sha256)
         con = duckdb.connect()
         try:
             spec = spec_for_dir(con, Path(out_dir))
         finally:
             con.close()
-        streamed = bundle.stream_bundle(inp, _TextSink(), reader_rules(spec), text_digests=True)
-        if streamed.sha256 != recorded:
+        work = Path(tempfile.mkdtemp(prefix="clinvar-gkm-parquet-roundtrip-", dir=work_dir))
+        try:
+            with Hasher(workers) as hasher:
+                src = bundle_records(inp, spec, work, hasher, memory_limit=memory_limit, threads=threads)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        if src.sha256 != recorded:
             raise RoundTripError(
-                f"--full {full} has sha256 {streamed.sha256}, but the files were built from {recorded}"
+                f"--full {full} has sha256 {src.sha256}, but the files were built from {recorded}"
             )
-        if streamed.text_sha256 != r.text_sha256:
+        if src.records_sha256 != r.records_sha256:
+            names = set(src.sections) | set(r.section_records)
+            differ = sorted(
+                s for s in names if src.sections.get(s, EMPTY_SHA256) != r.section_records.get(s, EMPTY_SHA256)
+            )
+            if src.root_sha256 != r.root_sha256:
+                differ.append("the root")
             out["problems"].append(
-                f"the rebuilt text has sha256 {r.text_sha256}, --full {inp.name}'s text {streamed.text_sha256}"
+                f"the rebuilt records have records sha256 {r.records_sha256}, --full {inp.name}'s "
+                f"{src.records_sha256} (they differ in {', '.join(differ)})"
             )
             return out
-        out["checked"].append(f"the text of {inp.name}")
+        out["checked"].append(f"the records of {inp.name}")
     out["passed"] = True
     return out
 
@@ -735,7 +953,7 @@ def verify_roundtrip(
 
 
 def run_rebuild_command(args) -> int:
-    """`clinvar-gkm-parquet rebuild`: write the bundle back; prints its sha256."""
+    """`clinvar-gkm-parquet rebuild`: write the bundle back; prints its records sha256."""
     result = rebuild(
         args.dir,
         args.out,
@@ -745,10 +963,19 @@ def run_rebuild_command(args) -> int:
         log=lambda m: print(f"clinvar-gkm-parquet: {m}", file=sys.stderr, flush=True),
     )
     total = sum(result.sections.values())
+    if result.checked:
+        check = (
+            "matches the manifest's records_sha256 and every section's section_records_sha256: record-identical "
+            "to the source"
+        )
+    else:
+        check = (
+            f"not checked: tool {result.tool_version} built the set and recorded no records sha256; check it with "
+            "verify --roundtrip --full <the bundle>"
+        )
     print(
         f"rebuilt {result.out}: bundle schema {result.schema_version or '(none stated)'}, "
-        f"{len(result.sections)} section(s), {total} "
-        f"records, {result.text_size} bytes of text, sha256 {result.text_sha256} (matches the manifest's "
-        f"source_text_sha256 and every section's section_text_sha256): {promise_text(result.promise)}"
+        f"{len(result.sections)} section(s), {total} records, {result.text_size} bytes of text, records sha256 "
+        f"{result.records_sha256} ({check})"
     )
     return 0

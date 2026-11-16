@@ -1,7 +1,9 @@
-"""The round trip (ADR 0005): a full sections build is a lossless encoding of the bundle's uncompressed text.
+"""The round trip (ADR 0005; record-identical since ADR 0008 decisions 1.2, 1.3): a full sections build encodes
+every record of the bundle, and `rebuild` writes back records whose canonical forms (docs/round-trip.md) are the
+source's.
 
-`rebuild` writes the excerpt back byte for byte (the expectation is the fixture's own text, decompressed by
-stdlib gzip); the recorded sha256s are recomputed here from that text with hashlib; and every refusal and
+The expected records sha256s are computed here from the fixture by an independent reference
+(_input_helpers.independent_records_sha256: stdlib json and hashlib, not canonical.py); every refusal and
 build-time failure is checked on the real excerpt, changed minimally where a test says so. Nothing here is a
 hand-written record.
 """
@@ -17,11 +19,10 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _fixture import CLINVAR_SCHEMA, FIXTURE, GOLDEN_SECTIONS_SPEC, PAIRING, SPEC, reader_rules
-from _input_helpers import local_input
-from _tables_helpers import connect, read_fixture
+from _fixture import CLINVAR_SCHEMA, FIXTURE, GOLDEN_SECTIONS_SPEC, PAIRING, SPEC
+from _input_helpers import independent_records_sha256, independent_section_sha256
+from _tables_helpers import connect, read_fixture, roundtrip_check, write_bundle
 
-from clinvar_gkm_parquet import bundle
 from clinvar_gkm_parquet.build import EMPTY_SHA256, KV_PREFIX
 from clinvar_gkm_parquet.cli import main
 from clinvar_gkm_parquet.compiler import root_parts
@@ -33,6 +34,9 @@ from clinvar_gkm_parquet.sqltemplate import render_generic
 
 TEXT = gzip.decompress(FIXTURE.read_bytes())
 FULL = ["--full", FIXTURE]
+DOC = json.loads(TEXT)
+SECTION_NAMES = {s for t in SPEC.tables for s in t.sections}
+RECORDS_SHA256 = independent_records_sha256(DOC, SECTION_NAMES)
 
 
 def cli(capsys, *args) -> tuple[int, str, str]:
@@ -41,23 +45,18 @@ def cli(capsys, *args) -> tuple[int, str, str]:
     return rc, got.out, got.err
 
 
-def section_texts(text: bytes) -> dict[str, bytes]:
-    """section -> its record lines as written (each with its ',' and newline), from the text with re alone."""
-    out = {}
-    for m in re.finditer(rb'^  "(\w+)": \{\n(.*?)^  \}', text, re.M | re.S):
-        out[m.group(1).decode()] = m.group(2)
-    return out
-
-
 def kv_of(path: Path) -> dict[str, str]:
     rows = duckdb.connect().execute(f"SELECT key, value FROM parquet_kv_metadata('{path}')").fetchall()
     return {k.decode()[len(KV_PREFIX) :]: v.decode() for k, v in rows if k.decode().startswith(KV_PREFIX)}
 
 
-def rewrite(path: Path, select: str) -> None:
-    """Rewrite a built file with `select` (over `t`), keeping its key-value metadata: a tampered file."""
+def rewrite(path: Path, select: str, rename: dict[str, str] | None = None) -> None:
+    """Rewrite a built file with `select` (over `t`), keeping its key-value metadata (keys renamed by `rename`): a
+    tampered file."""
     con = duckdb.connect()
     kv = con.execute(f"SELECT key, value FROM parquet_kv_metadata('{path}')").fetchall()
+    rename = {(KV_PREFIX + a).encode(): (KV_PREFIX + b).encode() for a, b in (rename or {}).items()}
+    kv = [(rename.get(k, k), v) for k, v in kv]
     meta = ", ".join(f"'{k.decode()}': '{v.decode().replace(chr(39), chr(39) * 2)}'" for k, v in kv)
     tmp = path.with_name(path.name + ".new")
     con.execute(f"CREATE VIEW t AS SELECT * FROM read_parquet('{path}')")
@@ -147,24 +146,73 @@ def test_record_sql_refuses_a_type_with_no_exact_text():
 # --- the round trip on the excerpt -----------------------------------------------------------------------------
 
 
-def test_rebuild_is_byte_identical(built, tmp_path, capsys):
+def test_rebuild_is_record_identical(built, tmp_path, capsys):
     for name in ("bundle.json", "bundle.json.gz"):
         rc, out, _ = cli(capsys, "rebuild", built, "-o", tmp_path / name)
-        assert rc == 0 and hashlib.sha256(TEXT).hexdigest() in out
-    assert (tmp_path / "bundle.json").read_bytes() == TEXT
-    assert gzip.decompress((tmp_path / "bundle.json.gz").read_bytes()) == TEXT
+        assert rc == 0 and f"records sha256 {RECORDS_SHA256} (matches the manifest's" in out
+    text = (tmp_path / "bundle.json").read_bytes()
+    assert gzip.decompress((tmp_path / "bundle.json.gz").read_bytes()) == text
+    rebuilt = json.loads(text)
+    assert list(rebuilt) == list(DOC) and rebuilt == DOC
+    assert independent_records_sha256(rebuilt, SECTION_NAMES) == RECORDS_SHA256
     assert sorted(p.name for p in tmp_path.iterdir()) == ["bundle.json", "bundle.json.gz"]  # no partial files
 
 
-def test_build_records_the_text(built):
+def test_build_records_the_records_sha256s(built):
     manifest = json.loads((built / "manifest.json").read_text())
-    assert manifest["source_text_sha256"] == hashlib.sha256(TEXT).hexdigest()
-    assert manifest["source_text_size"] == len(TEXT)
-    texts = section_texts(TEXT)
+    assert manifest["records_sha256"] == RECORDS_SHA256
+    assert manifest["round_trip"] == {"promise": "record-identical", "source_layout": "line"}
+    assert not {"source_text_sha256", "source_text_size"} & set(manifest)
     for t in SPEC.tables:
         kv = kv_of(built / t.file_name)
-        want = hashlib.sha256(texts[t.name]).hexdigest() if t.name in texts else EMPTY_SHA256
-        assert kv["section_text_sha256"] == want, t.name
+        want = independent_section_sha256(DOC.get(t.name, {}))
+        assert kv["section_records_sha256"] == want and "section_text_sha256" not in kv, t.name
+    assert kv_of(built / "gene.parquet")["section_records_sha256"] != EMPTY_SHA256
+
+
+def _shuffled(v):
+    """The value with every object's keys and every array's elements reversed, at every depth."""
+    if isinstance(v, dict):
+        return {k: _shuffled(x) for k, x in reversed(list(v.items()))}
+    if isinstance(v, list):
+        return [_shuffled(x) for x in reversed(v)]
+    return v
+
+
+def _rewritten(edit) -> dict[str, list[tuple[str, str]]]:
+    return {
+        s: [(k, json.dumps(edit(json.loads(r)), ensure_ascii=False)) for k, r in recs] for s, recs in BASE.items()
+    }
+
+
+def _build_from(sections, path: Path, capsys) -> tuple[Path, dict]:
+    src = write_bundle(sections, path.with_suffix(".json.gz"))
+    assert cli(capsys, "build", "--full", src, *PAIRING, "--out", path)[0] == 0
+    kvs = {t.name: kv_of(path / t.file_name)["section_records_sha256"] for t in SPEC.tables}
+    return path, {"records_sha256": json.loads((path / "manifest.json").read_text())["records_sha256"], **kvs}
+
+
+def test_reordered_keys_and_arrays_build_the_same_records(built, tmp_path, capsys):
+    """Another text of the same records (keys and arrays reversed, spaced, non-ASCII written as itself) builds a
+    set with the same records sha256s, which rebuilds; a changed value changes its section's and the bundle's."""
+    sections = _rewritten(_shuffled)
+    assert sections["scv"][0][1] != BASE["scv"][0][1]
+    out, got = _build_from(sections, tmp_path / "reordered", capsys)
+    assert got["records_sha256"] == RECORDS_SHA256
+    assert got == {"records_sha256": RECORDS_SHA256} | {
+        t.name: kv_of(built / t.file_name)["section_records_sha256"] for t in SPEC.tables
+    }
+    rc, stdout, _ = cli(capsys, "rebuild", out, "-o", tmp_path / "r.json")
+    assert rc == 0 and f"records sha256 {RECORDS_SHA256} (matches the manifest's" in stdout
+
+    def changed(o):
+        o = _shuffled(o)
+        if o.get("id") == BASE["submitter"][0][0]:
+            o["name"] += "."
+        return o
+
+    _, other = _build_from(_rewritten(changed), tmp_path / "changed", capsys)
+    assert sorted(k for k in got if other[k] != got[k]) == ["records_sha256", "submitter"]
 
 
 def test_ordinal_is_the_bundle_order(built):
@@ -172,30 +220,6 @@ def test_ordinal_is_the_bundle_order(built):
     for section, records in read_fixture().items():
         got = con.execute(f"SELECT id FROM read_parquet('{built / (section + '.parquet')}') ORDER BY ordinal")
         assert [r[0] for r in got.fetchall()] == [k for k, _ in records], section
-
-
-def test_stream_bundle_text_digests():
-    class Sink:
-        def __init__(self):
-            self.texts = {}
-
-        def begin(self, v):
-            pass
-
-        def open_section(self, s):
-            return lambda k, r: None
-
-        def section_text(self, s, sha):
-            self.texts[s] = sha
-
-        def close_section(self, s):
-            pass
-
-    sink = Sink()
-    got = bundle.stream_bundle(local_input(FIXTURE), sink, reader_rules(), text_digests=True)
-    assert (got.text_sha256, got.text_size) == (hashlib.sha256(TEXT).hexdigest(), len(TEXT))
-    assert sink.texts == {s: hashlib.sha256(b).hexdigest() for s, b in section_texts(TEXT).items()}
-    assert bundle.stream_bundle(local_input(FIXTURE), Sink(), reader_rules()).text_sha256 is None
 
 
 def test_verify_roundtrip(built, capsys):
@@ -212,7 +236,7 @@ def test_rebuild_refuses_a_set_of_a_retired_spec(copy, tmp_path):
     for path in copy.glob("*.parquet"):
         kv = con.execute(f"SELECT key, value FROM parquet_kv_metadata('{path}')").fetchall()
         kv = {k.decode(): v.decode() for k, v in kv}
-        for k in ("table_spec_sha256", "schema_set_sha256", "column_set_sha256", "section_text_sha256"):
+        for k in ("table_spec_sha256", "schema_set_sha256", "column_set_sha256", "section_records_sha256"):
             kv.pop(KV_PREFIX + k, None)
         kv[KV_PREFIX + "table_spec"] = "baseline"
         meta = ", ".join(f"'{k}': '{v.replace(chr(39), chr(39) * 2)}'" for k, v in kv.items())
@@ -235,7 +259,7 @@ def test_rebuild_refuses_a_table_subset(tmp_path, capsys):
 def test_rebuild_refuses_a_selection(tmp_path, capsys):
     out = tmp_path / "sel"
     assert cli(capsys, "build", *FULL, *PAIRING, "--driver", "submitter", "--max-depth", "0", "--out", out)[0] == 0
-    assert not any("section_text_sha256" in kv_of(p) for p in out.glob("*.parquet"))
+    assert not any("section_records_sha256" in kv_of(p) for p in out.glob("*.parquet"))
     with pytest.raises(RoundTripError, match="selective build"):
         rebuild(out, tmp_path / "b.json")
 
@@ -265,16 +289,16 @@ def test_rebuild_refuses_a_pointer_outside_its_targets(copy, tmp_path):
 
 def test_rebuild_refuses_a_changed_value(copy, tmp_path):
     rewrite(copy / "submitter.parquet", "SELECT * REPLACE (upper(name) AS name) FROM t")
-    with pytest.raises(RoundTripMismatch, match="section submitter: the rebuilt record lines have sha256"):
+    with pytest.raises(RoundTripMismatch, match="section submitter: the rebuilt records have records sha256"):
         rebuild(copy, tmp_path / "b.json")
     assert not list(tmp_path.glob("*b.json*"))
 
 
 def test_rebuild_refuses_a_changed_manifest(copy, tmp_path):
     m = json.loads((copy / "manifest.json").read_text())
-    m["source_text_sha256"] = "0" * 64
+    m["records_sha256"] = "0" * 64
     (copy / "manifest.json").write_text(json.dumps(m))
-    with pytest.raises(RoundTripMismatch, match="the manifest records source_text_sha256 0000"):
+    with pytest.raises(RoundTripMismatch, match="the manifest records records_sha256 0000"):
         rebuild(copy, tmp_path / "b.json")
 
 
@@ -289,6 +313,33 @@ def test_rebuild_refuses_an_existing_output(built, tmp_path):
     (tmp_path / "b.json").write_text("x")
     with pytest.raises(RoundTripError, match="already exists"):
         rebuild(built, tmp_path / "b.json")
+
+
+def _as_if_built_by_1x(d: Path) -> None:
+    """The set as tool 1.x would have recorded it: section_text_sha256 (a text sha256, here a stand-in) in every
+    file, no records sha256 anywhere."""
+    for p in d.glob("*.parquet"):
+        rewrite(p, "SELECT * FROM t", {"section_records_sha256": "section_text_sha256"})
+    m = json.loads((d / "manifest.json").read_text())
+    m.pop("records_sha256")
+    for f in m["files"]:
+        data = (d / f["name"]).read_bytes()
+        f.update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
+        if f["name"].endswith(".parquet"):
+            m["tables"][f["name"][: -len(".parquet")]]["sha256"] = f["sha256"]
+    (d / "manifest.json").write_text(json.dumps(m))
+
+
+def test_a_set_built_by_1x_rebuilds_unchecked_and_verifies_only_against_its_bundle(copy, tmp_path, capsys):
+    _as_if_built_by_1x(copy)
+    result = rebuild(copy, tmp_path / "b.json")
+    assert not result.checked and result.records_sha256 == RECORDS_SHA256
+    rc, stdout, _ = cli(capsys, "rebuild", copy, "-o", tmp_path / "c.json")
+    assert rc == 0 and "not checked: tool" in stdout and "verify --roundtrip --full" in stdout
+    rc, _, stderr = cli(capsys, "verify", copy, "--roundtrip")
+    assert rc == 2 and "no records sha256" in stderr
+    rc, stdout, _ = cli(capsys, "verify", copy, "--roundtrip", "--full", FIXTURE)
+    assert rc == 0 and "round trip: identical" in stdout, stdout
 
 
 def test_verify_roundtrip_reports_a_difference(copy, capsys):
@@ -317,31 +368,51 @@ def _obj(edit):
     return lambda r: json.dumps(edit(json.loads(r)), ensure_ascii=False, separators=(",", ":"))
 
 
+def _check_one(section: str, edit, work: Path) -> None:
+    """The build's round-trip check (roundtrip.check_rows) of one sections table, the first record of `section`
+    changed by edit(text)."""
+    sections = {s: list(r) for s, r in BASE.items()}
+    k, r = sections[section][0]
+    sections[section][0] = (k, edit(r))
+    roundtrip_check(connect(sections), SPEC.table(section), work)
+
+
 @pytest.mark.parametrize(
     "section, edit",
     [
         ("scv", _obj(lambda o: {**o, "description": None})),  # a JSON null: read as absent
-        ("submitter", _obj(lambda o: dict(reversed(list(o.items()))))),  # keys out of BigQuery's sorted order
-        ("scv", _obj(lambda o: dict(sorted(o.items())))),  # keys out of the STRUCT order
-        ("copyNumberCount", lambda r: r.replace('"copies":', '"copies":1.0,"x":').replace(',"x":', "", 1)),
         ("location", _obj(lambda o: {**o, "start": [None, None]})),  # an open Range: no column tells it apart
         ("allele", _obj(lambda o: {**o, "location": o["location"].replace("#/location/", "#/gene/")})),
+        # a fraction in an integer column: the cast rounds it
+        ("copyNumberCount", lambda r: re.sub(r'"copies":(\d+)', r'"copies":\1.01', r, count=1)),
+    ],
+)
+def test_build_check_refuses_what_it_cannot_write_back(section, edit, tmp_path):
+    key = BASE[section][0][0]
+    with pytest.raises(RoundTripError, match=rf"table {section}: round trip: key {re.escape(key)}: .*differs"):
+        _check_one(section, edit, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "section, edit",
+    [
+        ("submitter", _obj(lambda o: dict(reversed(list(o.items()))))),  # keys out of BigQuery's sorted order
+        ("scv", _obj(lambda o: dict(sorted(o.items())))),  # keys out of the STRUCT order
+        ("copyNumberCount", lambda r: re.sub(r'"copies":(\d+)', r'"copies":\1.0', r, count=1)),  # 1 as 1.0
         ("submitter", lambda r: r.replace(":", ": ", 1)),  # not the producer's compact layout
         ("gene", lambda r: r.replace("ncbigene", "\\u006ecbigene", 1)),  # an escape the producer does not write
     ],
 )
-def test_build_check_refuses_what_it_cannot_write_back(section, edit):
-    with pytest.raises(duckdb.Error, match=rf"table {section}: round trip: key .*differs from the bundle line"):
-        _build_one(section, edit)
+def test_build_check_passes_another_text_of_the_same_record(section, edit, tmp_path):
+    """Key order, spacing, escapes and number spelling don't count (tool 1.x's byte check refused them)."""
+    assert edit(BASE[section][0][1]) != BASE[section][0][1]
+    _check_one(section, edit, tmp_path)
 
 
-def test_build_check_compares_the_key_text():
-    con = connect({s: list(r) for s, r in BASE.items()})
-    con.execute(
-        "UPDATE bundle_submitter SET key_json = replace(key_json, 'clinvar', '\\u0063linvar') WHERE ordinal = 0"
-    )
-    with pytest.raises(duckdb.Error, match="table submitter: round trip"):
-        con.execute(f"SELECT * FROM ({render_generic(SPEC.table('submitter'))})").fetchall()
+def test_build_check_passes_the_excerpt(tmp_path):
+    con = connect(BASE)
+    for t in SPEC.tables:
+        roundtrip_check(con, t, tmp_path)
 
 
 def test_empty_list_and_control_character_round_trip():
