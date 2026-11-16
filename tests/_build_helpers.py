@@ -155,8 +155,8 @@ KV = {
 
 
 def passthrough_spec(drop: tuple[str, ...] = ()):
-    """One table per bundle section: id = key, data = record. Exercises the real reader, replay, pipeline,
-    build and verify on a real bundle without depending on the table SQL (tests/test_tables*.py)."""
+    """One table per bundle section: id = key, data = record. Exercises the real reader, pipeline, build and
+    verify on a real bundle without depending on the table SQL. Its root is the ClinVar-GKM excerpt's."""
     col = lambda n, k: {  # noqa: E731
         "name": n,
         "type": "VARCHAR",
@@ -170,6 +170,7 @@ def passthrough_spec(drop: tuple[str, ...] = ()):
         "bundle_schema_versions": ["1.1.0"],
         "sources": [],
         "writer": {"compression": "snappy", "row_group_size": 122880},
+        "root": {"version_property": "schema_version", "other_values": False},
         "tables": [
             {
                 "name": s,

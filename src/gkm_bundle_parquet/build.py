@@ -35,8 +35,8 @@ from pathlib import Path
 
 import duckdb
 
-from . import __version__, baseline, bundle, compiled, default_pairing, sources, sqltemplate
-from .compat import BUILTIN_SPECS, COMPILED_SPEC, KV_PREFIX
+from . import __version__, bundle, compiled, sources, sqltemplate
+from .compat import KV_PREFIX
 from .errors import BundleFormatError, InputError, SchemaVersionError, SpecError, ToolError
 from .model import (
     BuildInputs,
@@ -47,7 +47,7 @@ from .model import (
     TableResult,
 )
 from .roundtrip import promise_of
-from .spec import Spec, SpecSource, Table, is_compiled, load_spec, resolve_spec
+from .spec import Spec, SpecSource, Table
 from .spec import kv_metadata as spec_kv_metadata
 from .transport import open_stream
 
@@ -63,8 +63,8 @@ KV_KEYS = (
     "source_release",
     "duckdb_version",
 )
-# Every key, in the order it is written: KV_KEYS, plus the spec's name (build() always writes it; a file without
-# it predates named specs and was written by clinvar-gkm, spec.spec_from_kv), the keys of a custom or compiled spec
+# Every key, in the order it is written: KV_KEYS, plus the spec's name (build() always writes it), the keys of a
+# custom or compiled spec
 # (spec.kv_metadata), in a lossless build only the sha256 of the table's section text (ADR 0005; bundle.py) and,
 # in a selective build only, the selection (ADR 0004; select.SELECTION_METADATA_KEY).
 KV_ORDER = (
@@ -212,23 +212,19 @@ def kv_metadata(
 
 
 def spec_kv(spec: Spec, source: SpecSource | None) -> dict[str, str]:
-    """The spec's key-value entries (spec.kv_metadata). A spec given without its source is labelled by its own
-    name and version, and marked custom unless it is the built-in of that name and version. An unnamed spec
-    (an in-memory parse_spec mapping, for tests; every spec file has a name) writes its version only."""
+    """The spec's key-value entries (spec.kv_metadata). A spec given without its source (an in-memory parse_spec
+    mapping, for tests) is labelled by its own name and version and marked custom; an unnamed one writes its
+    version only."""
     if source is not None:
         return spec_kv_metadata(source)
     if spec.name is None:
         return {"table_spec_version": spec.spec_version}
-    if spec.root is None and BUILTIN_SPECS.get(spec.name) == spec.spec_version:
-        if spec.name != COMPILED_SPEC and load_spec(spec.spec_version, spec.name) == spec:
-            return {"table_spec": spec.name, "table_spec_version": spec.spec_version}
     return {"table_spec": spec.name, "table_spec_version": spec.spec_version, "table_spec_builtin": "false"}
 
 
 def render_table(table: Table) -> str:
-    """The table's SELECT: the baseline renderer for key/record/refs tables, else the table's SQL template
-    (baseline.renderer_for)."""
-    return baseline.renderer_for(table)(table)
+    """The table's SELECT: the generic renderer (sqltemplate.render_generic)."""
+    return sqltemplate.render_generic(table)
 
 
 def _kv_sql(kv: dict[str, str], table: str) -> str:
@@ -859,10 +855,9 @@ def write_manifest(
         "label": DERIVED_LABEL,
         "derived": True,
         "note": (
-            f"Parquet tables derived from the {'' if spec.root else 'ClinVar-GKM '}JSON bundle(s) listed under "
-            "inputs by "
+            "Parquet tables derived from the JSON bundle listed under inputs by "
             f"gkm-bundle-parquet {kv['tool_version']} (table spec {spec_name} {kv['table_spec_version']})"
-            f"{subset}. The bundles are the record; these files may be regenerated."
+            f"{subset}. The bundle is the record; these files may be regenerated."
         ),
         "build_date": ended_at[:10],
         "source_release": None,
@@ -988,7 +983,7 @@ def build(
     keep_work: bool = False,
     memory_limit: str | None = None,
     threads: int | None = None,
-    spec: Spec | None = None,
+    spec: Spec,
     spec_source: SpecSource | None = None,
     driver=None,
     render: Callable[[Table], str] | None = None,
@@ -997,15 +992,11 @@ def build(
     """Stream the inputs once and build every table section by section (design plan §6.2), then write the
     manifest.
 
-    `spec` defaults to the default spec, sections, as the CLI's does (ADR 0003), compiled for the full's
-    schema_version (ADR 0006); a build meant to match the published set passes the clinvar-gkm spec. `spec_source`
-    (spec.resolve_spec) labels the files, see
-    `spec_kv`. With `driver` (a driver.Driver), the selection runs first, writing a mini-bundle in the work
-    directory, and the tables are built from it (ADR 0004): every file and the manifest then carry the
-    selection, while the source keys and `inputs` still name the bundle given. Without one, the selection
-    code is never reached. `render` defaults to `render_table`."""
-    if spec is None:
-        spec, spec_source = resolve_spec_for(None, inputs)
+    `spec` is the spec to build, compiled from the bundle's schema and column set (compiled.compile_pairing,
+    ADR 0006); `spec_source` labels the files, see `spec_kv`. With `driver` (a driver.Driver), the selection runs
+    first, writing a mini-bundle in the work directory, and the tables are built from it (ADR 0004): every file
+    and the manifest then carry the selection, while the source keys and `inputs` still name the bundle given.
+    Without one, the selection code is never reached. `render` defaults to `render_table`."""
     if (
         spec_source is not None
         and spec_source.raw is not None
@@ -1171,43 +1162,28 @@ def _log(msg: str) -> None:
     print(f"gkm-bundle-parquet: {msg}", file=sys.stderr, flush=True)
 
 
-def resolve_spec_for(
-    arg: str | None, inputs: BuildInputs, bundle_schema: str | None = None, column_set: str | None = None
-) -> tuple[Spec, SpecSource]:
-    """The spec a `--spec` value names, for these inputs. A pairing (`bundle_schema`, `column_set`) compiles for
-    any bundle. With none, the compiled spec is the default bundle's, for the version the full's first lines state
-    (ADR 0006). Any other spec doesn't read the bundle here."""
-    if (bundle_schema is None) != (column_set is None):
-        raise InputError("--bundle-schema and --column-set go together: a schema and the column set it pairs with")
-    if bundle_schema is not None:
-        if not is_compiled(arg):
-            raise InputError(f"--bundle-schema and --column-set compile the sections spec; not with --spec {arg}")
-        return compiled.compile_pairing(str(bundle_schema), str(column_set))
-    if not is_compiled(arg):
-        return resolve_spec(arg)
-    prop = default_pairing.version_property()
-    version = bundle.peek_version(inputs.full, prop)
-    if version is None:
-        raise SchemaVersionError(
-            f"{inputs.full.name}: no {prop!r} at the root, so it isn't the tool's default bundle; give its schema "
-            "and column set with --bundle-schema and --column-set. See the compatibility matrix in the README."
-        )
-    return resolve_spec(arg, version)
+PAIRING_REQUIRED = (
+    "--bundle-schema and --column-set are required: the bundle's schema (a file, a URL or a schema-set "
+    "directory) and the column set that pairs with it; the tool has no default bundle (ADR 0009)"
+)
+
+
+def resolve_pairing(args) -> tuple[Spec, SpecSource]:
+    """The sections spec compiled from `--bundle-schema` and `--column-set`, both required."""
+    bundle_schema, column_set = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
+    if bundle_schema is None or column_set is None:
+        raise InputError(PAIRING_REQUIRED)
+    return compiled.compile_pairing(str(bundle_schema), str(column_set))
 
 
 def run_build_command(args) -> int:
-    """`gkm-bundle-parquet build`: resolve the spec, the selection options and the inputs from the CLI
-    arguments, build, print a summary. No --spec means the default spec (sections)."""
-    from .driver import driver_from_args, with_pairing_rules
+    """`gkm-bundle-parquet build`: compile the spec from the pairing, resolve the selection options and the input
+    from the CLI arguments, build, print a summary."""
+    from .driver import driver_from_args
 
-    spec_arg = getattr(args, "spec", None)
-    if not is_compiled(spec_arg):
-        resolve_spec(spec_arg)  # a bad --spec is reported before any input is touched
+    spec, source = resolve_pairing(args)  # a bad pairing is reported before the bundle is touched
     driver = driver_from_args(args)
     inputs = resolve_build_inputs(args)
-    pairing = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
-    spec, source = resolve_spec_for(spec_arg, inputs, *pairing)
-    driver = with_pairing_rules(driver, spec, pairing)
     tables = [t.strip() for t in args.tables.split(",") if t.strip()] if args.tables else None
     result = build(
         inputs,

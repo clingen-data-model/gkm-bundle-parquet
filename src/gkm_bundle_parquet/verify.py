@@ -1,5 +1,4 @@
-"""verify: spec check of a built directory, bundle recompute, the round trip (ADR 0005) and the oracle comparison
-(design plan §8.2).
+"""verify: the check of a built directory, the bundle recompute and the round trip (ADR 0005) (design plan §8.2).
 
 Owned by the build/verify work package. Exit codes (CLI): 0 = pass, 1 = differences, 2 = usage or input error.
 
@@ -15,7 +14,6 @@ import json
 import shutil
 import sys
 import tempfile
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,7 +27,6 @@ from .build import (
     KV_PREFIX,
     MANIFEST_NAME,
     SectionPipeline,
-    configure,
     default_work_dir,
     describe_file,
     file_sha256,
@@ -41,11 +38,11 @@ from .build import (
     table_groups,
 )
 from .bundle import ROOT_VALUES_TABLE
-from .compat import KV_PREFIXES, PUBLISHED_SPEC, TABLE_SPEC_VERSION
-from .compiled import is_recorded, recorded_spec
-from .errors import InputError, SpecError, ToolError
+from .compat import KV_PREFIXES
+from .compiled import compile_pairing, for_sorted_input, is_recorded, recorded_spec
+from .errors import InputError, SpecError
 from .model import BuildInputs
-from .spec import SPEC_KV_KEYS, Spec, Table, is_compiled, load_spec, resolve_spec, spec_from_kv
+from .spec import SPEC_KV_KEYS, Spec
 
 SAMPLES = 5
 _TRUNCATE = 300
@@ -82,44 +79,56 @@ def dir_kv(con: duckdb.DuckDBPyConnection, out_dir: Path) -> dict[str, dict[str,
     return {p.name: read_kv(con, p) for p in sorted(Path(out_dir).glob("*.parquet"))}
 
 
-def spec_for_dir(con: duckdb.DuckDBPyConnection, out_dir: Path, spec_arg: str | None = None) -> Spec:
-    """The spec that wrote the files, from their key-value metadata (spec.spec_from_kv); every file must name the
-    same one. A file with no table_spec key predates named specs and was written by clinvar-gkm. A custom spec
-    needs `spec_arg` (--spec, its tables.yaml, whose sha256 must equal the recorded one); for a built-in one,
-    `spec_arg` is optional and must name that spec. A compiled spec comes from the file a build wrote beside its
-    manifest, checked against the hash the files record (compiled.recorded_spec). A directory with no files:
-    `spec_arg`, else clinvar-gkm."""
+def spec_for_dir(con: duckdb.DuckDBPyConnection, out_dir: Path) -> Spec:
+    """The spec that wrote the files: the compiled spec a build wrote beside its manifest, checked against the hash
+    every file records (compiled.recorded_spec); every file must name the same one. Sets written by 1.x with the
+    sections spec are read the same way. A set of another table spec (1.x's other built-in specs, or a
+    tables.yaml, retired in 2.0.0) is refused."""
     kvs = dir_kv(con, out_dir)
     named = {
         tuple(kv.get(k) for k in SPEC_KV_KEYS) for kv in kvs.values() if kv.get("table_spec_version") is not None
     }
     if not named:
-        return resolve_spec(spec_arg)[0] if spec_arg else load_spec(TABLE_SPEC_VERSION)
+        raise SpecError(f"{out_dir}: no Parquet file of this tool names the table spec that wrote it")
     if len(named) > 1:
-        labels = ", ".join(sorted(f"{n or PUBLISHED_SPEC} {v}" for n, v, *_ in named))
+        labels = ", ".join(sorted(f"{n or '(unnamed)'} {v}" for n, v, *_ in named))
         raise SpecError(f"the files were written by different table specs: {labels}")
     kv = {k: v for k, v in zip(SPEC_KV_KEYS, named.pop(), strict=True) if v is not None}
-    if is_recorded(kv):
-        tools = {f.get("tool_version") for f in kvs.values()} - {None}
-        kv["tool_version"] = ", ".join(sorted(tools)) or "?"
-        spec = recorded_spec(out_dir, kv)
-        if spec_arg is not None and not is_compiled(spec_arg):
-            _, given = resolve_spec(spec_arg)
-            raise SpecError(f"--spec {spec_arg} is {given.label}, but the files were written by {spec.label}")
-        return spec
-    if "table_spec" not in kv:
-        name, spec = PUBLISHED_SPEC, load_spec(kv["table_spec_version"])
-    else:
-        spec, source = spec_from_kv(kv, spec_arg)
-        if not source.builtin:
-            return spec
-        name = source.name
-    if spec_arg is not None:
-        _, given = resolve_spec(spec_arg)
-        version = kv["table_spec_version"]
-        if (given.name, given.version, given.builtin) != (name, version, True):
-            raise SpecError(f"--spec {spec_arg} is {given.label}, but the files were written by {name} {version}")
-    return spec
+    if not is_recorded(kv):
+        name = f"{kv.get('table_spec', '(unnamed)')} {kv.get('table_spec_version', '?')}"
+        raise SpecError(
+            f"the files were written by table spec {name}, not a compiled spec; this "
+            "tool reads only compiled specs since 2.0.0 (ADR 0008): check them with the 1.x tool that wrote them"
+        )
+    tools = {f.get("tool_version") for f in kvs.values()} - {None}
+    kv["tool_version"] = ", ".join(sorted(tools)) or "?"
+    return recorded_spec(out_dir, kv)
+
+
+def pairing_problems(out_dir: Path, bundle_schema: str, column_set: str) -> list[str]:
+    """Whether a pairing compiles to the spec that wrote the files: its table_spec_sha256, schema_set_sha256 and
+    column_set_sha256 against the ones every file records. Empty: it does. A bundle the general reader normalized
+    was written with the key-sorted form of the pairing's spec (compiled.for_sorted_input), which matches too."""
+    spec, source = compile_pairing(str(bundle_schema), str(column_set))
+    table_spec = {source.sha256, for_sorted_input(spec, source)[1].sha256}
+    con = duckdb.connect()
+    try:
+        kvs = dir_kv(con, out_dir)
+    finally:
+        con.close()
+    out = []
+    for key, got in (
+        ("table_spec_sha256", table_spec),
+        ("schema_set_sha256", {source.schema_set_sha256}),
+        ("column_set_sha256", {source.column_set_sha256}),
+    ):
+        recorded = sorted({kv.get(key) or "(none)" for kv in kvs.values()})
+        if len(recorded) != 1 or recorded[0] not in got:
+            out.append(
+                f"--bundle-schema and --column-set compile to {key} {' or '.join(sorted(got))}; the files record "
+                f"{', '.join(recorded)}"
+            )
+    return out
 
 
 def dir_selection(kvs: dict[str, dict[str, str]]) -> str | None:
@@ -402,287 +411,6 @@ def bundle_recompute(
     return out
 
 
-# --- the oracle ------------------------------------------------------------------------------------------------
-
-
-def _relation_types(con, path: Path) -> dict[str, duckdb.DuckDBPyType]:
-    rel = con.sql(f"SELECT * FROM {_pq(path)} LIMIT 0")
-    return dict(zip(rel.columns, rel.dtypes, strict=True))
-
-
-def _nested_paths(t: duckdb.DuckDBPyType, steps: tuple = ()) -> Iterator[tuple]:
-    """Leaf paths of a nested type, plus a NULL test at every struct/list and a length at every list."""
-    if t.id == "struct":
-        yield steps + ("#null",)
-        for name, child in t.children:
-            yield from _nested_paths(child, steps + (name,))
-    elif t.id == "list":
-        yield steps + ("#null",)
-        yield steps + ("#len",)
-        yield from _nested_paths(t.child, steps + ("[]",))
-    else:
-        yield steps
-
-
-def _path_expr(base: str, steps: tuple, depth: int = 0) -> str:
-    if not steps:
-        return base
-    step, rest = steps[0], steps[1:]
-    if step == "#null":
-        return f"(({base}) IS NULL)"
-    if step == "#len":
-        return f"len({base})"
-    if step == "[]":
-        v = f"_x{depth}"
-        return f"list_transform({base}, lambda {v}: {_path_expr(v, rest, depth + 1)})"
-    return _path_expr(f"struct_extract({base}, {sql_str(step)})", rest, depth)
-
-
-def _path_label(col: str, steps: tuple) -> str:
-    out = col
-    for s in steps:
-        out += {"#null": " (null)", "#len": " (length)", "[]": "[]"}.get(s, f".{s}")
-    return out
-
-
-def _json_first_diff(a, b, path: str = "$") -> str | None:
-    """None if a and b are equal as JSON values (object key order ignored, bool distinct from number), else
-    the path of the first difference."""
-    if isinstance(a, bool) or isinstance(b, bool):
-        return None if type(a) is type(b) and a == b else path
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return None if a == b else path
-    if type(a) is not type(b):
-        return path
-    if isinstance(a, dict):
-        for k in sorted(set(a) | set(b)):
-            if k not in a or k not in b:
-                return f"{path}.{k}"
-            d = _json_first_diff(a[k], b[k], f"{path}.{k}")
-            if d:
-                return d
-        return None
-    if isinstance(a, list):
-        if len(a) != len(b):
-            return f"{path} (length {len(a)} vs {len(b)})"
-        for i, (x, y) in enumerate(zip(a, b, strict=True)):
-            d = _json_first_diff(x, y, f"{path}[{i}]")
-            if d:
-                return d
-        return None
-    return None if a == b else path
-
-
-def _keep_smallest(samples: list, item, n: int) -> None:
-    samples.append(item)
-    if len(samples) > 2 * n:
-        samples.sort(key=lambda s: s["id"])
-        del samples[n:]
-
-
-def compare_table(
-    con: duckdb.DuckDBPyConnection,
-    name: str,
-    tool_file: Path,
-    ref_file: Path,
-    table: Table | None,
-    *,
-    samples: int = SAMPLES,
-) -> dict:
-    """§8.2 items 1-5 for one table. `table` (the spec entry) names the id and record columns; without it the
-    id column is `id` (or `key`) and the record columns are `data` / `value`."""
-    res: dict = {"table": name}
-    a_types, b_types = _relation_types(con, tool_file), _relation_types(con, ref_file)
-    a_desc, b_desc = describe_file(con, tool_file), describe_file(con, ref_file)
-    diffs = _schema_diffs(a_desc, b_desc, "tool", "reference")
-    res["schema"] = {"equal": a_desc == b_desc, "differences": diffs, "tool": a_desc, "reference": b_desc}
-
-    n_a = con.execute(f"SELECT count(*) FROM {_pq(tool_file)}").fetchone()[0]
-    n_b = con.execute(f"SELECT count(*) FROM {_pq(ref_file)}").fetchone()[0]
-    res["rows"] = {"tool": n_a, "reference": n_b, "equal": n_a == n_b}
-
-    idc = key_column(table) if table else None
-    if idc is None or idc not in a_types or idc not in b_types:
-        idc = next((c for c in ("id", "key") if c in a_types and c in b_types), None)
-    if idc is None:
-        res["ids"] = {"column": None, "problem": "no shared id column"}
-        return res
-    qi = sql_ident(idc)
-    ids: dict = {"column": idc}
-    for side, (x, y) in {"only_tool": (tool_file, ref_file), "only_reference": (ref_file, tool_file)}.items():
-        q = f"SELECT {qi} FROM {_pq(x)} EXCEPT SELECT {qi} FROM {_pq(y)}"
-        cnt = con.execute(f"SELECT count(*) FROM ({q})").fetchone()[0]
-        smp = [r[0] for r in con.execute(f"SELECT * FROM ({q}) ORDER BY 1 LIMIT {int(samples)}").fetchall()]
-        ids[side] = {"count": cnt, "samples": smp}
-    for side, f in (("duplicates_tool", tool_file), ("duplicates_reference", ref_file)):
-        ids[side] = con.execute(f"SELECT count(*) - count(DISTINCT {qi}) FROM {_pq(f)}").fetchone()[0]
-    res["ids"] = ids
-
-    common = [c for c in a_types if c in b_types and c != idc]
-    if table:
-        record_cols = [c.name for c in table.columns if c.derivation.kind == "record" and c.name in common]
-    else:
-        record_cols = [c for c in ("data", "value") if c in common]
-    typed = [c for c in common if c not in record_cols]
-
-    join = f"FROM {_pq(tool_file)} a JOIN {_pq(ref_file)} b ON a.{qi} = b.{qi}"
-
-    def cmp(c: str) -> tuple[str, str]:
-        qc = sql_ident(c)
-        if str(a_types[c]) == str(b_types[c]):
-            return f"a.{qc} IS DISTINCT FROM b.{qc}", "typed"
-        return f"a.{qc} IS DISTINCT FROM TRY_CAST(b.{qc} AS {a_types[c]})", f"reference cast to {a_types[c]}"
-
-    # One join for every typed column; record columns enter it as md5 digests, not as text, so the join's
-    # payload stays small. Only the rows whose digests differ are fetched as text (_compare_records).
-    def side(f: Path) -> str:
-        cols = [f"{qi}"] + [sql_ident(c) for c in typed]
-        cols += [f"md5_number({sql_ident(c)}::VARCHAR) AS {sql_ident('__h_' + c)}" for c in record_cols]
-        return f"(SELECT {', '.join(cols)} FROM {_pq(f)})"
-
-    hjoin = f"FROM {side(tool_file)} a JOIN {side(ref_file)} b ON a.{qi} = b.{qi}"
-    exprs = [cmp(c)[0] for c in typed]
-    exprs += [f"a.{sql_ident('__h_' + c)} IS DISTINCT FROM b.{sql_ident('__h_' + c)}" for c in record_cols]
-    counts = con.execute("SELECT count(*)" + "".join(f", count_if({e})" for e in exprs) + f" {hjoin}").fetchone()
-    res["joined_rows"] = counts[0]
-    columns: dict = {}
-    for c, n in zip(typed, counts[1 : 1 + len(typed)], strict=True):
-        expr, how = cmp(c)
-        entry: dict = {"distinct": n, "compared_as": how}
-        if n:
-            qc = sql_ident(c)
-            rows = con.execute(
-                f"SELECT a.{qi}, a.{qc}::VARCHAR, b.{qc}::VARCHAR {join} WHERE {expr} "
-                f"ORDER BY a.{qi} LIMIT {int(samples)}"
-            ).fetchall()
-            entry["samples"] = [{"id": i, "tool": _trunc(x), "reference": _trunc(y)} for i, x, y in rows]
-            if how == "typed" and a_types[c].id in ("struct", "list"):
-                entry["paths"] = _path_breakdown(con, join, c, a_types[c])
-        columns[c] = entry
-    res["columns"] = columns
-
-    records: dict = {}
-    for c, n in zip(record_cols, counts[1 + len(typed) :], strict=True):
-        entry = {
-            "bytes_differ": n,
-            "json_differ": 0,
-            "format_only": 0,
-            "samples_content": [],
-            "samples_format": [],
-        }
-        if n:
-            _compare_records(con, tool_file, ref_file, qi, c, entry, samples)
-        records[c] = entry
-    res["records"] = records
-    return res
-
-
-def _path_breakdown(con, join: str, col: str, t: duckdb.DuckDBPyType) -> dict[str, int]:
-    qc = sql_ident(col)
-    paths = list(_nested_paths(t))
-    exprs = [f"count_if({_path_expr('a.' + qc, p)} IS DISTINCT FROM {_path_expr('b.' + qc, p)})" for p in paths]
-    try:
-        row = con.execute(f"SELECT {', '.join(exprs)} {join} WHERE a.{qc} IS DISTINCT FROM b.{qc}").fetchone()
-    except duckdb.Error as e:  # a path DuckDB can't express; the column-level count still stands
-        return {"(breakdown failed)": 0, "error": str(e)[:200]}
-    return {_path_label(col, p): n for p, n in zip(paths, row, strict=True) if n}
-
-
-def _compare_records(con, tool_file: Path, ref_file: Path, qi: str, col: str, entry: dict, samples: int) -> None:
-    """Rows whose bytes differ, streamed: parsed-JSON equal (format only) or not (content). The differing ids
-    are found from md5 digests first, so only those rows' text crosses the join."""
-    qc = sql_ident(col)
-    h = f"md5_number({qc}::VARCHAR)"
-    con.execute(
-        f"""CREATE OR REPLACE TEMP TABLE _oracle_diff_ids AS
-            SELECT a.{qi} AS id FROM (SELECT {qi}, {h} AS h FROM {_pq(tool_file)}) a
-            JOIN (SELECT {qi}, {h} AS h FROM {_pq(ref_file)}) b ON a.{qi} = b.{qi}
-            WHERE a.h IS DISTINCT FROM b.h"""
-    )
-
-    def only_diff(f: Path) -> str:
-        return f"(SELECT {qi}, {qc}::VARCHAR AS v FROM {_pq(f)} WHERE {qi} IN (SELECT id FROM _oracle_diff_ids))"
-
-    cur = con.execute(
-        f"SELECT a.{qi}, a.v, b.v FROM {only_diff(tool_file)} a JOIN {only_diff(ref_file)} b ON a.{qi} = b.{qi}"
-    )
-    content, fmt = [], []
-    while True:
-        batch = cur.fetchmany(_BATCH)
-        if not batch:
-            break
-        for i, x, y in batch:
-            try:
-                where = _json_first_diff(json.loads(x), json.loads(y)) if x is not None and y is not None else "$"
-            except ValueError:
-                where = "$ (invalid JSON)"
-            item = {"id": i, "tool": _trunc(x), "reference": _trunc(y)}
-            if where is None:
-                entry["format_only"] += 1
-                _keep_smallest(fmt, item, samples)
-            else:
-                entry["json_differ"] += 1
-                item["path"] = where
-                _keep_smallest(content, item, samples)
-    entry["samples_content"] = sorted(content, key=lambda s: s["id"])[:samples]
-    entry["samples_format"] = sorted(fmt, key=lambda s: s["id"])[:samples]
-    con.execute("DROP TABLE _oracle_diff_ids")
-
-
-def table_differences(r: dict) -> list[str]:
-    """One line per kind of difference found in a compare_table result (empty = the table matches)."""
-    if "missing" in r:
-        return [r["missing"]]
-    out = []
-    if not r["schema"]["equal"]:
-        out.append(f"schema ({len(r['schema']['differences'])} difference(s))")
-    if not r["rows"]["equal"]:
-        out.append(f"rows {r['rows']['tool']} vs {r['rows']['reference']}")
-    ids = r.get("ids", {})
-    if ids.get("column") is None:
-        out.append("no shared id column")
-        return out
-    if ids["only_tool"]["count"]:
-        out.append(f"{ids['only_tool']['count']} id(s) only in tool")
-    if ids["only_reference"]["count"]:
-        out.append(f"{ids['only_reference']['count']} id(s) only in reference")
-    for side in ("duplicates_tool", "duplicates_reference"):
-        if ids.get(side):
-            out.append(f"{ids[side]} {side.replace('_', ' in ')}")
-    for c, e in r.get("columns", {}).items():
-        if e["distinct"]:
-            out.append(f"{c}: {e['distinct']} row(s) differ")
-    for c, e in r.get("records", {}).items():
-        if e["bytes_differ"]:
-            out.append(
-                f"{c}: {e['bytes_differ']} byte difference(s) ({e['json_differ']} content, "
-                f"{e['format_only']} format only)"
-            )
-    return out
-
-
-def compare_dirs(
-    con: duckdb.DuckDBPyConnection, tool_dir: Path, ref_dir: Path, spec: Spec, *, samples: int = SAMPLES
-) -> dict:
-    """The oracle: every table of the spec (and any other .parquet in either directory), one at a time."""
-    tool_dir, ref_dir = Path(tool_dir), Path(ref_dir)
-    names = [t.name for t in spec.tables]
-    extra = sorted(
-        {p.name[: -len(".parquet")] for d in (tool_dir, ref_dir) for p in d.glob("*.parquet")} - set(names)
-    )
-    tables = {}
-    for name in names + extra:
-        a, b = tool_dir / f"{name}.parquet", ref_dir / f"{name}.parquet"
-        if not a.exists() or not b.exists():
-            where = " and ".join(w for w, p in (("tool", a), ("reference", b)) if not p.exists())
-            tables[name] = {"table": name, "missing": f"missing in {where}"}
-        else:
-            tbl = spec.table(name) if name in names else None
-            tables[name] = compare_table(con, name, a, b, tbl, samples=samples)
-        tables[name]["differences"] = table_differences(tables[name])
-    return {"tool": str(tool_dir), "reference": str(ref_dir), "tables": tables}
-
-
 # --- report ----------------------------------------------------------------------------------------------------
 
 
@@ -692,7 +420,6 @@ class VerifyReport:
     spec_version: str
     spec_problems: list[str] = field(default_factory=list)
     recompute: list[dict] | None = None
-    oracle: dict | None = None
     spec_name: str | None = None
     selection: dict | None = None  # the files' selection entry (a subset), or None for a full build
     roundtrip: dict | None = None  # roundtrip.verify_roundtrip
@@ -704,8 +431,6 @@ class VerifyReport:
         if self.roundtrip and not self.roundtrip["passed"]:
             return False
         if self.recompute and any(recompute_failed(g) for g in self.recompute):
-            return False
-        if self.oracle and any(t["differences"] for t in self.oracle["tables"].values()):
             return False
         return True
 
@@ -719,7 +444,6 @@ class VerifyReport:
             "spec_check": {"problems": self.spec_problems},
             "bundle_recompute": self.recompute,
             "roundtrip": self.roundtrip,
-            "oracle": self.oracle,
         }
 
     def to_markdown(self) -> str:
@@ -773,59 +497,7 @@ class VerifyReport:
                 + "."
             ]
             lines.append("")
-        if self.oracle is not None:
-            lines += [
-                "## Oracle",
-                "",
-                f"Tool `{self.oracle['tool']}` against reference `{self.oracle['reference']}`.",
-                "",
-                "| Table | Result |",
-                "| --- | --- |",
-            ]
-            for name, t in self.oracle["tables"].items():
-                lines.append(f"| {name} | {'; '.join(t['differences']) or 'match'} |")
-            lines.append("")
-            for name, t in self.oracle["tables"].items():
-                if t["differences"]:
-                    lines += _oracle_table_md(name, t)
         return "\n".join(lines).rstrip() + "\n"
-
-
-def _oracle_table_md(name: str, t: dict) -> list[str]:
-    lines = [f"### {name}", ""]
-    if "missing" in t:
-        return lines + [f"- {t['missing']}", ""]
-    for d in t["schema"]["differences"]:
-        lines.append(f"- schema: {d}")
-    if not t["rows"]["equal"]:
-        lines.append(f"- rows: tool {t['rows']['tool']}, reference {t['rows']['reference']}")
-    ids = t.get("ids", {})
-    for side in ("only_tool", "only_reference"):
-        if ids.get(side, {}).get("count"):
-            lines.append(
-                f"- ids {side.replace('_', ' in ')}: {ids[side]['count']}; e.g. "
-                f"{', '.join(map(str, ids[side]['samples']))}"
-            )
-    for c, e in t.get("columns", {}).items():
-        if not e["distinct"]:
-            continue
-        lines.append(f"- column `{c}` ({e['compared_as']}): {e['distinct']} row(s) differ")
-        for p, n in e.get("paths", {}).items():
-            lines.append(f"  - `{p}`: {n}")
-        for s in e.get("samples", []):
-            lines.append(f"  - e.g. {s['id']}: tool `{s['tool']}` / reference `{s['reference']}`")
-    for c, e in t.get("records", {}).items():
-        if not e["bytes_differ"]:
-            continue
-        lines.append(
-            f"- `{c}`: {e['bytes_differ']} byte difference(s): {e['json_differ']} content, "
-            f"{e['format_only']} format only"
-        )
-        for s in e["samples_content"]:
-            lines.append(f"  - content, e.g. {s['id']} at `{s['path']}`")
-        for s in e["samples_format"]:
-            lines.append(f"  - format only, e.g. {s['id']}")
-    return lines + [""]
 
 
 def write_report(report: VerifyReport, path: Path) -> tuple[Path, Path]:
@@ -855,32 +527,20 @@ def run_verify_command(args) -> int:
     roundtrip = getattr(args, "roundtrip", False)
     if args.full and not (args.bundle_recompute or roundtrip):
         return _usage("--full is only read with --bundle-recompute or --roundtrip")
-    if args.against is not None and not Path(args.against).is_dir():
-        return _usage(f"--against {args.against}: not a directory")
+    pairing = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
+    if (pairing[0] is None) != (pairing[1] is None):
+        return _usage("--bundle-schema and --column-set go together: a schema and the column set it pairs with")
 
     meta = duckdb.connect()
-    spec = spec_for_dir(meta, out_dir, getattr(args, "spec", None))
+    spec = spec_for_dir(meta, out_dir)
     kvs = dir_kv(meta, out_dir)
     meta.close()
     selection = dir_selection(kvs)
     params = json.loads(selection) if selection is not None else None
-    if args.against is not None:
-        # The oracle compares a full clinvar-gkm build with ClinVar-GKM's published set (design plan §8.2).
-        if params is not None:
-            return _usage(
-                f"--against compares a full build with the published set; {out_dir} is a selection (driver "
-                f"{params.get('driver')}, gkm_bundle_parquet.selection)"
-            )
-        written_by = {
-            (kv.get("table_spec", PUBLISHED_SPEC), kv.get("table_spec_builtin", "true")) for kv in kvs.values()
-        }
-        if any(name != PUBLISHED_SPEC or builtin == "false" for name, builtin in written_by):
-            names = ", ".join(sorted(n + (" (custom)" if b == "false" else "") for n, b in written_by))
-            return _usage(
-                f"--against needs a set built with the built-in {PUBLISHED_SPEC} spec; {out_dir} has {names}"
-            )
     report = VerifyReport(dir=str(out_dir), spec_version=spec.spec_version, spec_name=spec.name, selection=params)
     report.spec_problems = verify_dir(out_dir, spec)
+    if pairing[0] is not None:
+        report.spec_problems += pairing_problems(out_dir, *pairing)
     if args.bundle_recompute:
         if params is None:
             inputs = resolve_build_inputs(args)
@@ -916,23 +576,10 @@ def run_verify_command(args) -> int:
             out_dir,
             full=args.full,
             sha256=args.sha256,
-            spec_arg=getattr(args, "spec", None),
             memory_limit=args.memory_limit,
             threads=args.threads,
             work_dir=args.work_dir,
         )
-    if args.against is not None:
-        root = Path(args.work_dir) if args.work_dir else None
-        tmp = Path(tempfile.mkdtemp(prefix="gkm-bundle-parquet-oracle-", dir=root))
-        try:
-            con = duckdb.connect()
-            configure(con, memory_limit=args.memory_limit, threads=args.threads, temp_directory=tmp)
-            report.oracle = compare_dirs(con, out_dir, Path(args.against), spec)
-            con.close()
-        except duckdb.Error as e:
-            raise ToolError(f"oracle comparison failed: {e}") from e
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
     if args.report:
         md, js = write_report(report, args.report)
         print(f"report: {md} and {js}")
@@ -947,8 +594,6 @@ def _summary(r: VerifyReport) -> str:
     if r.roundtrip is not None:
         word = "JSON-equal" if r.roundtrip.get("promise") == "json-equal" else "identical"
         parts.append(f"round trip: {word if r.roundtrip['passed'] else 'DIFFERS'}")
-    if r.oracle is not None:
-        parts.append(f"oracle: {sum(bool(t['differences']) for t in r.oracle['tables'].values())} table(s) differ")
     lines = [f"verify {'pass' if r.passed else 'DIFFERENCES'}: " + "; ".join(parts)]
     lines += [f"  {p}" for p in r.spec_problems[:20]]
     if r.roundtrip is not None:

@@ -17,20 +17,20 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _fixture import FIXTURE, GOLDEN_SECTIONS_SPEC
+from _fixture import CLINVAR_SCHEMA, FIXTURE, GOLDEN_SECTIONS_SPEC, PAIRING, SPEC, reader_rules
 from _input_helpers import local_input
 from _tables_helpers import connect, read_fixture
 
 from gkm_bundle_parquet import bundle
 from gkm_bundle_parquet.build import EMPTY_SHA256, KV_PREFIX
 from gkm_bundle_parquet.cli import main
-from gkm_bundle_parquet.default_pairing import reader_rules, sections_of
+from gkm_bundle_parquet.compiler import root_parts
 from gkm_bundle_parquet.errors import RoundTripError, SpecError
 from gkm_bundle_parquet.roundtrip import RoundTripMismatch, lossless_problems, rebuild, record_sql
-from gkm_bundle_parquet.spec import parse_spec, resolve_spec
+from gkm_bundle_parquet.schemas import load_schema_set
+from gkm_bundle_parquet.spec import parse_spec
 from gkm_bundle_parquet.sqltemplate import render_generic
 
-SPEC, _ = resolve_spec("sections", "1.1.0")
 TEXT = gzip.decompress(FIXTURE.read_bytes())
 FULL = ["--full", FIXTURE]
 
@@ -69,7 +69,7 @@ def rewrite(path: Path, select: str) -> None:
 @pytest.fixture(scope="module")
 def built(tmp_path_factory) -> Path:
     out = tmp_path_factory.mktemp("rt") / "sections"
-    assert main(["build", *map(str, FULL), "--out", str(out)]) == 0
+    assert main(["build", *map(str, FULL), *PAIRING, "--out", str(out)]) == 0
     return out
 
 
@@ -111,7 +111,10 @@ def _raw_sections() -> dict:
 @pytest.mark.parametrize(
     "change, message",
     [
-        (lambda r: r["tables"].pop(), "must read each section of bundle schema 1.1.0 once"),
+        (
+            lambda r: r["tables"].append({**r["tables"][0], "name": "again"}),
+            "the tables must read one section each, each section once (repeated: ['sequenceReference'])",
+        ),
         (lambda r: r["tables"][0].pop("json"), "table sequenceReference: needs a json block"),
         (lambda r: r["tables"][0]["columns"].pop(), "needs one ordinal column, as its last column"),
         (lambda r: r["tables"][1]["columns"][-2]["derivation"].pop("targets"), "needs its target section(s)"),
@@ -203,26 +206,35 @@ def test_verify_roundtrip(built, capsys):
 # --- rebuild refuses what it can't reproduce -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("spec", ["baseline", "clinvar-gkm"])
-def test_rebuild_refuses_other_specs(tmp_path, capsys, spec):
-    out = tmp_path / spec
-    assert cli(capsys, "build", *FULL, "--spec", spec, "--out", out)[0] == 0
-    assert not any("section_text_sha256" in kv_of(p) for p in out.glob("*.parquet"))
-    assert "source_text_sha256" not in json.loads((out / "manifest.json").read_text())
-    with pytest.raises(RoundTripError, match="not a lossless encoding"):
-        rebuild(out, tmp_path / "b.json")
+def test_rebuild_refuses_a_set_of_a_retired_spec(copy, tmp_path):
+    """A set 1.x wrote with another table spec (here, as baseline would label it) names no compiled spec."""
+    con = duckdb.connect()
+    for path in copy.glob("*.parquet"):
+        kv = con.execute(f"SELECT key, value FROM parquet_kv_metadata('{path}')").fetchall()
+        kv = {k.decode(): v.decode() for k, v in kv}
+        for k in ("table_spec_sha256", "schema_set_sha256", "column_set_sha256", "section_text_sha256"):
+            kv.pop(KV_PREFIX + k, None)
+        kv[KV_PREFIX + "table_spec"] = "baseline"
+        meta = ", ".join(f"'{k}': '{v.replace(chr(39), chr(39) * 2)}'" for k, v in kv.items())
+        tmp = path.with_name(path.name + ".new")
+        con.execute(
+            f"COPY (SELECT * FROM read_parquet('{path}')) TO '{tmp}' (FORMAT parquet, KV_METADATA {{{meta}}})"
+        )
+        tmp.replace(path)
+    with pytest.raises(SpecError, match="not a compiled spec; this tool reads only compiled specs since 2.0.0"):
+        rebuild(copy, tmp_path / "b.json")
 
 
 def test_rebuild_refuses_a_table_subset(tmp_path, capsys):
     out = tmp_path / "subset"
-    assert cli(capsys, "build", *FULL, "--tables", "gene,scv", "--out", out)[0] == 0
+    assert cli(capsys, "build", *FULL, *PAIRING, "--tables", "gene,scv", "--out", out)[0] == 0
     with pytest.raises(RoundTripError, match="missing table"):
         rebuild(out, tmp_path / "b.json")
 
 
 def test_rebuild_refuses_a_selection(tmp_path, capsys):
     out = tmp_path / "sel"
-    assert cli(capsys, "build", *FULL, "--driver", "submitter", "--max-depth", "0", "--out", out)[0] == 0
+    assert cli(capsys, "build", *FULL, *PAIRING, "--driver", "submitter", "--max-depth", "0", "--out", out)[0] == 0
     assert not any("section_text_sha256" in kv_of(p) for p in out.glob("*.parquet"))
     with pytest.raises(RoundTripError, match="selective build"):
         rebuild(out, tmp_path / "b.json")
@@ -353,4 +365,5 @@ def test_empty_list_and_control_character_round_trip():
 
 
 def test_every_section_has_one_table():
-    assert sorted(t.sections[0] for t in SPEC.tables) == sorted(sections_of("1.1.0"))
+    sections = root_parts(load_schema_set(str(CLINVAR_SCHEMA)), "schema_version").collections
+    assert sorted(t.sections[0] for t in SPEC.tables) == sorted(sections)

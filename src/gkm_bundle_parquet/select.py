@@ -38,7 +38,7 @@ disk holds the output plus a compressed spool of the selected records, which shr
   a pass completes one level and part of the next. Pointers mostly point to EARLIER sections (vcv -> proposition
   -> variation -> allele -> location -> sequenceReference), so a hop back costs about one pass.
 - Pass 1 reads the whole source: it checks the sha256 (BundleFileSource, when an expected one is known), the
-  sections against the bundle's shape (its RootRules: the default bundle's, or a pairing's), the line grammar, and
+  sections against the bundle's shape (its RootRules, from the pairing), the line grammar, and
   the seeds. A later pass stops at the first section after which nothing is wanted, and skips sections with nothing
   wanted without parsing their keys. A re-opened bundle is checked against pass 1 (Tap), and every later pass's
   per-section record counts must equal pass 1's.
@@ -46,9 +46,9 @@ disk holds the output plus a compressed spool of the selected records, which shr
 - At the end, the spool is merged per section by source position into the mini-bundle (gzip, mtime 0, no file
   name, so the same inputs give the same bytes), which is re-read with bundle.stage_bundle to prove it valid.
 
-The root (ADR 0008 decision 4.1, ADR 0009): a BundleFileSource reads it by its RootRules, the default bundle's
-unless given a pairing's (compiled.reader_rules). The version property is the rules' (none, or optional, for a
-pairing), and the mini-bundle writes it only when the source has one. An empty collection (`"<section>": {}`) is
+The root (ADR 0008 decision 4.1, ADR 0009): a BundleFileSource reads it by its RootRules, the pairing's
+(compiled.reader_rules). The version property is the rules' (none, or optional), and the mini-bundle writes it
+only when the source has one. An empty collection (`"<section>": {}`) is
 read and selects nothing; a root value that isn't a collection, where the shape allows one, is copied to the
 mini-bundle verbatim, after its sections. A file in another JSON layout is read whole into the canonical line
 layout (bundle.py), when the rules allow the general reader; its sha256 is the file's.
@@ -87,7 +87,6 @@ from .bundle import (
     stage_bundle,
 )
 from .compat import KV_PREFIX
-from .default_pairing import reader_rules
 from .errors import BundleFormatError, InputError, SchemaVersionError, ToolError
 from .model import InputFile
 from .transport import open_stream
@@ -113,9 +112,6 @@ _ROOT_MEMBER = re.compile(rb'  ("(?:[^"\\]|\\.)*"): (.+?)(,?)\n')  # an empty co
 def _version_line(prop: str) -> re.Pattern[bytes]:
     """Line 2 when it holds the version: `  "<prop>": "<version>",` (no comma when nothing follows)."""
     return re.compile(rb'  "' + re.escape(prop.encode("utf-8")) + rb'": "([^"\\]*)"(,?)\n')
-
-
-SCHEMA_LINE = _version_line("schema_version")  # the default bundle's line 2 (scripts/extract-fixtures.py)
 
 
 # A string VALUE that starts with "#/": its opening quote follows ':' (object member), '[' or ',' (array
@@ -230,6 +226,7 @@ class RecordSource(Protocol):
     name: str
     sha256: str | None
     schema_version: str
+    rules: RootRules  # how the root is read: its version property and sections
 
     def open_pass(self, number: int) -> AbstractContextManager[RecordPass]: ...
 
@@ -320,8 +317,8 @@ class BundleFileSource:
     """A bundle file (local path or https:// URL) as a RecordSource. Pass 1 opens `inp`; later passes call
     `reopen(pass_number)` for a fresh stream of the same bytes (default: open `inp` again), and are checked
     against pass 1 with a Tap. After pass 1, `sha256` and `size` are those of the bytes read; a mismatch with
-    `inp.expected_sha256` raises InputError. `rules` say how to read the root (default: the default bundle's). A
-    file in another layout is read whole, as the canonical line layout, if the rules allow the general reader."""
+    `inp.expected_sha256` raises InputError. `rules` say how to read the root (compiled.reader_rules). A file in
+    another layout is read whole, as the canonical line layout, if the rules allow the general reader."""
 
     def __init__(
         self,
@@ -329,13 +326,13 @@ class BundleFileSource:
         *,
         reopen: Callable[[int], BinaryIO] | None = None,
         checkpoint_bytes: int = CHECKPOINT_BYTES,
-        rules: RootRules | None = None,
+        rules: RootRules,
     ):
         self.input = inp
         self.name = inp.name
         self.sha256: str | None = None
         self.size: int | None = None
-        self.rules = rules if rules is not None else reader_rules()
+        self.rules = rules
         self._reopen = reopen
         self._every = checkpoint_bytes
         self._reference: Tap | None = None
@@ -755,7 +752,7 @@ class _HashingWriter(io.RawIOBase):
 
 
 def select(
-    source: RecordSource | InputFile,
+    source: RecordSource,
     seeds: Mapping[str, Iterable[str]],
     out_path: Path | str,
     *,
@@ -776,9 +773,7 @@ def select(
         raise SelectionError(f"follow must be out, in or both, not {follow!r}") from e
     if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
         raise SelectionError(f"max_depth must be a non-negative integer or None, not {max_depth!r}")
-    if isinstance(source, InputFile):
-        source = BundleFileSource(source)
-    rules = getattr(source, "rules", None) or reader_rules()
+    rules = source.rules
     names = rules.shape_of(source.schema_version).collections
     index = section_index(names)
     allowed_list = _allowed(sections, names, index)

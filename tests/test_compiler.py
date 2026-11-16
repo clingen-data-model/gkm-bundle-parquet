@@ -1,13 +1,15 @@
 """The compiler (ADR 0006): on the real 1.1.0 schemas and its column set it reproduces the golden spec and the
 build; it refuses a bad column-set entry and any pattern its rules don't cover.
 
-Offline: the schemas come from the shipped snapshot. Bundle records are real (the excerpt, tests/_fixture.py). The
-small schema sets of the fail-loud tests are hand-written schemas, not records.
+Offline: the schemas are ClinVar-GKM's 1.1.0 set, a test fixture (tests/fixtures/clinvar-gkm). Bundle records are
+real (the excerpt, tests/_fixture.py). The small schema sets of the fail-loud tests are hand-written schemas, not
+records.
 """
 
 from __future__ import annotations
 
 import copy
+import dataclasses
 import gzip
 import json
 import re
@@ -16,24 +18,22 @@ from pathlib import Path
 import duckdb
 import pytest
 import yaml
-from _fixture import FIXTURE, GOLDEN_SECTIONS_SPEC, SECTIONS
+from _fixture import CLINVAR_COLUMNS, CLINVAR_SCHEMA, FIXTURE, GOLDEN_SECTIONS_SPEC, SECTIONS, SPEC, SPEC_SOURCE
 from _input_helpers import local_input
 
 from gkm_bundle_parquet import build as build_mod
 from gkm_bundle_parquet.columnset import load_column_set, parse_column_set
-from gkm_bundle_parquet.compiled import compiled_spec
 from gkm_bundle_parquet.compiler import compile_sections, root_parts, spec_for_sorted_input, table_spec_sha256
-from gkm_bundle_parquet.default_pairing import column_set_source, schema_source
 from gkm_bundle_parquet.errors import CompileError
 from gkm_bundle_parquet.model import BuildInputs
 from gkm_bundle_parquet.roundtrip import rebuild
 from gkm_bundle_parquet.schemas import SchemaFile, SchemaSet, load_schema_set
 from gkm_bundle_parquet.spec import Spec, Table, check_compiled, parse_spec
 
-SCHEMAS = load_schema_set(schema_source("1.1.0"))
-COLUMN_SET = load_column_set(column_set_source("1.1.0"))
+SCHEMAS = load_schema_set(str(CLINVAR_SCHEMA))
+COLUMN_SET = load_column_set(str(CLINVAR_COLUMNS))
 GOLDEN = parse_spec(yaml.safe_load(GOLDEN_SECTIONS_SPEC.read_text(encoding="utf-8")), require_name=True)
-COMPILED, SOURCE = compiled_spec("1.1.0")
+COMPILED, SOURCE = SPEC, SPEC_SOURCE
 
 
 def columns() -> dict:
@@ -175,7 +175,8 @@ def _rows(directory: Path, table: Table, names: list[str]) -> list[tuple]:
 def built(tmp_path_factory) -> tuple[Path, Path]:
     root = tmp_path_factory.mktemp("compiled")
     build_mod.build(_full(FIXTURE), root / "compiled", spec=COMPILED, spec_source=SOURCE)
-    build_mod.build(_full(FIXTURE), root / "golden", spec=GOLDEN)
+    # The golden spec predates `root`; it reads the bundle the way the compiled one does.
+    build_mod.build(_full(FIXTURE), root / "golden", spec=dataclasses.replace(GOLDEN, root=COMPILED.root))
     return root / "compiled", root / "golden"
 
 

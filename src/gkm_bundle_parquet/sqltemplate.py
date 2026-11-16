@@ -1,26 +1,23 @@
-"""Render a table's SQL from sql/<table>.sql and the spec (design plan §3.1), or from the spec alone.
+"""Render a table's SQL from the spec alone: the generic renderer (design plan §3.1, ADR 0003).
 
-`render(table)` renders the table's shipped sql/<table>.sql. `render_generic(table)` (the generic renderer, for
-a table with no such file, e.g. in a user's own spec) writes that file's text from the spec's derivation kinds
-(`generic_template`: one placeholder per column, `WHERE {{known_keys}}` for `known_fields`) and renders it the
-same way, so a hand-written file of generic columns and the generic renderer give the same SQL byte for byte
-(tests/test_generic.py proves it for every such built-in table). It builds key, record, refs (joined on from
-baseline.refs_ctes), scalar-path, bare-id, pointer-section, typed-copy, extension-slot, json-text and range-exact /
-range-min / range-max columns, with the path rules in spec.py; `computed` columns and row filters need a shipped
-file (`generic_problems`). The built-in sections spec is rendered this way.
+`render_generic(table)` writes a SQL template from the spec's derivation kinds (`generic_template`: one placeholder
+per column, `WHERE {{known_keys}}` for `known_fields`) and renders it. It builds key, record, ordinal,
+scalar-path, bare-id, pointer-section, typed-copy, extension-slot, json-text and range-exact / range-min /
+range-max columns, with the path rules in spec.py; it builds no row filter, and one section per table
+(`generic_problems`).
 
-Owned by the table-spec work package. Contract with build.py:
+Contract with build.py:
 
 - `sql/_macros.sql` holds DuckDB macros shared by the tables (e.g. bare-id and pointer-section helpers that fail
   loudly on a non-pointer); build.py runs it once per connection before any table.
-- `render(table)` returns ONE SELECT statement over the `bundle_<section>` tables (columns `key`, `record`)
-  whose output columns are exactly `table.columns`, in order, with the spec types. Types come from the spec, not
-  from the SQL text: the SQL files use placeholders that render() fills from the spec, so each type has one
-  source. build.py wraps the result as `COPY (SELECT * FROM (<sql>) ORDER BY <sort_key>) TO ...`.
-- Anything the spec can't map (an unknown extension name, an evidence-line id of no known shape, a non-pointer
-  proposition object) must make the query fail with DuckDB's error(), naming the table, column and key.
+- `render_generic(table)` returns ONE SELECT statement over the `bundle_<section>` tables (columns `key`,
+  `record`) whose output columns are exactly `table.columns`, in order, with the spec types. Types come from the
+  spec: the template's placeholders are filled from it, so each type has one source. build.py wraps the result as
+  `COPY (SELECT * FROM (<sql>) ORDER BY <sort_key>) TO ...`.
+- Anything the spec can't map (an unknown extension name, an unexpected field, a non-pointer where a pointer is
+  expected) must make the query fail with DuckDB's error(), naming the table, column and key.
 
-Placeholders in sql/<table>.sql (`{{name args}}`; COL is a spec column, its JSON path is the spec's
+Placeholders in a template (`{{name args}}`; COL is a spec column, its JSON path is the spec's
 `derivation.path`):
 
 - `{{type COL}}`              the column's spec type.
@@ -32,13 +29,11 @@ Placeholders in sql/<table>.sql (`{{name args}}`; COL is a spec column, its JSON
 - `{{typed COL [ptr=R,R..]}}` typed copy of the value at the path (see below). `ptr` lists the positions,
                               relative to the column value, of pointer strings to strip (`[]` = list element,
                               `.f` = struct field, e.g. `[].value_gene_array[].gene`).
-- `{{known_keys}}`            TRUE, or an error when the record has a top-level field no column's path names
-                              (for tables whose columns copy the whole record, BigQuery's `SELECT t.*`), or
-                              when the record's own `id` (when present) is not its bundle key.
+- `{{known_keys}}`            TRUE, or an error when the record has a top-level field no column's path names,
+                              or when the record's own `id` (when present) is not its bundle key.
 - `{{range_exact COL}}`, `{{range_min COL}}`, `{{range_max COL}}`  the integer-or-Range at the path (spec.py):
                               the integer (NULL for a Range), else the Range's [0] / [1]; anything else fails.
-- `{{json COL}}`              the JSON value at the column's path (as json_extract gives it), for hand-written
-                              derivations.
+- `{{json COL}}`              the JSON value at the column's path (as json_extract gives it).
 - `{{walk COL}}`              the value at a path with `[*]` steps (spec.py's path rules), each leaf read by
                               the column's kind (scalar-path, bare-id or pointer-section), cast to its type.
 - `{{source}}`                the FROM item: `bundle_<section>`, with each record parsed once (see below).
@@ -52,7 +47,7 @@ and `value_*` fields is an extension: the bundle's `{name, value}` is put in the
 when the column's entry is `json-type`, in the slot of the value's JSON type (cgp_ext_kind; spec.py), and a type
 the struct has no slot for stops the build.
 Empty versus NULL inside typed values (design plan §3.5): an absent struct or scalar is NULL; an absent list is
-`[]` (BigQuery stores no NULL arrays) when its parent is present, and at the top level follows the column's
+`[]` when its parent is present, and at the top level follows the column's
 `nulls` rule. In a table with a `json` block (ADR 0005) an absent list is NULL at every depth (and an extension's
 unused list slot NULL), so `[]` is always an empty list: the round trip needs the two apart.
 
@@ -63,7 +58,8 @@ That walk (the slow expression) parses each JSON value again at every level. Wit
 parsed once instead, by one json_transform into the spec types (`_t`), and each typed copy gets a fast expression
 that reads `_t`; a census (_Source) decides, per row, whether the fast expressions equal the slow ones, and a row
 it can't vouch for takes the slow expression, which stops with its own message. The output is the same, byte for
-byte, and so is every failure: render(table, fast=False) gives the slow SQL alone, and the tests compare the two.
+byte, and so is every failure: render_generic(table, fast=False) gives the slow SQL alone, and the tests compare
+the two.
 The fast expressions don't cover json-type extension slots: a table with such a column takes no census, and each
 typed copy takes the slow expression on the record's one parse.
 """
@@ -633,7 +629,7 @@ def _known_key_set(table: Table) -> list[str]:
     keys = {"id"}
     for c in table.columns:
         p = c.derivation.path
-        if p and c.derivation.kind not in ("computed", "refs"):  # refs reads the whole record ($)
+        if p:
             m = re.fullmatch(r"\$\.(\w+)(?:\[\*\])*", p)
             if not m:
                 raise SpecError(f"table {table.name}: column {c.name}: known_keys needs a top-level path, got {p}")
@@ -720,19 +716,8 @@ def _substitute(
     return _PLACEHOLDER.sub(sub, text)
 
 
-def has_template(table_name: str) -> bool:
-    """The tool ships sql/<table_name>.sql."""
-    return resources.files("gkm_bundle_parquet").joinpath("sql", f"{table_name}.sql").is_file()
-
-
-def render(table: Table, fast: bool = True) -> str:
-    """The table's SELECT. fast=False leaves {{source}} out (every placeholder reads the record with json_extract
-    and every typed copy takes the slow expression): the reference the fast SQL must equal, for tests."""
-    return _render_text(table, _sql_text(f"{table.name}.sql"), fast)
-
-
 def _render_text(table: Table, text: str, fast: bool) -> str:
-    """render() of a template text: sql/<table>.sql, or generic_template's."""
+    """A template text (generic_template's), rendered for `table`; fast=False leaves {{source}} out."""
     slot_cols: dict[str, _Gen] = {}
     src = _Source(table, _census(table, text)) if fast and re.search(r"\{\{\s*source\s*\}\}", text) else None
     sql = _substitute(table, text, src, slot_cols)
@@ -769,14 +754,13 @@ def _render_text(table: Table, text: str, fast: bool) -> str:
     return sql.rstrip(";")
 
 
-# ---------------------------------------------------------------- the generic renderer (no sql/<table>.sql)
+# ---------------------------------------------------------------- the generic renderer
 
 GENERIC_KINDS = (
     "ordinal",
     "json-text",
     "key",
     "record",
-    "refs",
     "scalar-path",
     "bare-id",
     "pointer-section",
@@ -893,8 +877,7 @@ def _walk_expr(table: Table, c: Column) -> str:
 
 
 def _generic_columns(table: Table) -> tuple[Table, list[str]]:
-    """(the table with each plainly read leaf column's path made plain, its SELECT list lines). Refs columns are
-    left out of the lines (render_generic joins them on)."""
+    """(the table with each plainly read leaf column's path made plain, its SELECT list lines)."""
     cols, lines = [], []
     for c in table.columns:
         kind, alias = c.derivation.kind, _ident(c.name)
@@ -916,7 +899,7 @@ def _generic_columns(table: Table) -> tuple[Table, list[str]]:
             lines.append(f"{{{{{_RANGE_PLACEHOLDER[kind]} {c.name}}}}} AS {alias}")
         elif kind == "json-text":
             lines.append(f"CAST({{{{json {c.name}}}}} AS VARCHAR) AS {alias}")
-        elif kind != "refs":
+        else:
             raise SpecError(f"table {table.name}: column {c.name}: the generic renderer has no kind {kind!r}")
         cols.append(c)
     if table.json is not None:  # the bundle line, for the round-trip check (roundtrip.checked_sql)
@@ -927,8 +910,7 @@ def _generic_columns(table: Table) -> tuple[Table, list[str]]:
 
 
 def generic_template(table: Table) -> tuple[Table, str]:
-    """(the table with plain paths, the sql/<table>.sql text the generic renderer renders for one section): the
-    same placeholders a hand-written file uses, so a hand-written file of generic columns renders the same SQL."""
+    """(the table with plain paths, the template text the generic renderer renders for one section)."""
     table, lines = _generic_columns(table)
     text = "SELECT\n" + ",\n".join(f"  {line}" for line in lines) + "\nFROM {{source}}\n"
     if table.known_fields:
@@ -939,18 +921,16 @@ def generic_template(table: Table) -> tuple[Table, str]:
 def generic_problems(table: Table) -> list[str]:
     """Why render_generic can't build `table` (empty: it can). Renders the SQL to find out, so a bad type, an
     unknown pointer position or an unused extension slot is found when the spec loads."""
-    from .baseline import REFS_TYPE
-
     out = []
     if len(table.sections) != 1:
         out.append(f"it reads {len(table.sections)} sections; the build reads one section per table")
     if table.row_filter is not None:
-        out.append("it has a row filter (only a shipped SQL file implements one)")
+        out.append("it has a row filter (the generic renderer builds none)")
     other = [c for c in table.columns if c.derivation.kind not in GENERIC_KINDS]
     if other:
         out.append(
-            f"column(s) {', '.join(f'{c.name} ({c.derivation.kind})' for c in other)}: only a shipped SQL file "
-            f"implements that kind (the generic renderer builds {', '.join(GENERIC_KINDS)})"
+            f"column(s) {', '.join(f'{c.name} ({c.derivation.kind})' for c in other)}: the generic renderer "
+            f"builds {', '.join(GENERIC_KINDS)}"
         )
     for c in table.columns:
         kind = c.derivation.kind
@@ -960,11 +940,6 @@ def generic_problems(table: Table) -> list[str]:
             out.append(f"column {c.name} (ordinal) must be BIGINT with nulls: never")
         elif kind == "record" and c.type not in _RECORD_TYPES:
             out.append(f"column {c.name} (record) must be one of {_RECORD_TYPES}, not {c.type}")
-        elif kind == "refs":
-            if c.type != REFS_TYPE:
-                out.append(f"column {c.name} (refs) must be {REFS_TYPE}, not {c.type}")
-            if c.nulls != "empty-list":
-                out.append(f"column {c.name} (refs) must have nulls: empty-list")
         elif kind in _RANGE_PLACEHOLDER:
             if c.type != "BIGINT":
                 out.append(f"column {c.name} ({kind}) must be BIGINT, not {c.type}")
@@ -972,7 +947,7 @@ def generic_problems(table: Table) -> list[str]:
                 out.append(f"column {c.name} ({kind}) must have nulls: when-absent")
         if not _GENERIC_NAME.fullmatch(c.name):
             out.append(f"column name {c.name!r} holds a space, '{{', '}}' or '='")
-        if table.known_fields and kind not in ("key", "record", "refs", "ordinal"):
+        if table.known_fields and kind not in ("key", "record", "ordinal"):
             if not _TOP_FIELD_PATH.fullmatch(c.derivation.path or ""):
                 out.append(
                     f"known_fields needs every column to read a top-level field ($.<field>); column {c.name} "
@@ -987,26 +962,12 @@ def generic_problems(table: Table) -> list[str]:
 
 
 def render_generic(table: Table, fast: bool = True) -> str:
-    """The table's SELECT built from its spec alone, under render()'s contract: generic_template, rendered as a
-    sql/<table>.sql would be (fast=False: the slow reference). A refs column comes from baseline.refs_ctes,
-    joined on the key."""
-    from .baseline import REFS_TYPE, refs_ctes
-
+    """The table's SELECT built from its spec alone: generic_template, rendered (fast=False: the slow reference).
+    A table with a `json` block also carries the round-trip check (roundtrip.checked_sql)."""
     plain, text = generic_template(table)
     sql = _render_text(plain, text, fast)
     if table.json is not None:
         from .roundtrip import checked_sql
 
         sql = checked_sql(table, sql)
-    if not table.columns_of("refs"):
-        return sql
-    key = _ident(table.columns_of("key")[0].name)
-    outer = ", ".join(
-        f"coalesce(r.refs, CAST([] AS {REFS_TYPE})) AS {_ident(c.name)}"
-        if c.derivation.kind == "refs"
-        else f"g.{_ident(c.name)}"
-        for c in table.columns
-    )
-    return (
-        f"{refs_ctes(table, table.sections[0])}\nSELECT {outer}\nFROM (\n{sql}\n) g LEFT JOIN r ON r.k = g.{key}"
-    )
+    return sql

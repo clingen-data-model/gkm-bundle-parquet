@@ -19,7 +19,7 @@ from _build_helpers import (
 )
 from _build_helpers import passthrough_spec as _passthrough_spec
 from _build_helpers import passthrough_sql as _passthrough_sql
-from _fixture import COUNTS, FIXTURE, SECTIONS
+from _fixture import CLINVAR_COLUMNS, CLINVAR_SCHEMA, COUNTS, FIXTURE, SECTIONS, SPEC, SPEC_SOURCE
 from _input_helpers import bundle_bytes, fixture_sections, local_input, write_gz
 
 from gkm_bundle_parquet import build as build_mod
@@ -476,18 +476,6 @@ def test_full_without_a_checksum_is_hashed_first(passthrough, tmp_path):
     assert kv[KV_PREFIX + "source_bundle_sha256"] == _sha(FIXTURE)
 
 
-def test_spec_may_read_a_subset_of_the_sections(tmp_path, monkeypatch):
-    """A (custom) spec need not read every bundle section: the others are still read, checked and counted, but
-    no table is built from them. A section the bundle schema lacks is refused by the reader (test_bundle.py)."""
-    monkeypatch.setattr(build_mod.sqltemplate, "macros_sql", lambda: "SELECT 1")
-    monkeypatch.setattr(build_mod, "render_table", _passthrough_sql)
-    res = build(_fixture_inputs(), tmp_path / "out", spec=_passthrough_spec(drop=("gene",)))
-    assert "gene" not in {t.table for t in res.tables} and len(res.tables) == len(SECTIONS) - 1
-    m = json.loads((tmp_path / "out" / "manifest.json").read_text())
-    assert m["sections"]["gene"] == COUNTS["gene"]
-    assert not (tmp_path / "out.work").exists()
-
-
 def test_build_refuses_sections_out_of_order(passthrough, tmp_path):
     s = fixture_sections()
     path = write_gz(tmp_path / "b.json.gz", bundle_bytes({"gene": s["gene"], "location": s["location"]}))
@@ -502,6 +490,8 @@ def _args(**kw):
     base = dict(
         full=None,
         sha256=None,
+        bundle_schema=None,
+        column_set=None,
         out=Path("out"),
         tables=None,
         work_dir=None,
@@ -528,20 +518,31 @@ def test_resolve_build_inputs(monkeypatch):
 
 
 def test_run_build_command(monkeypatch, capsys, tmp_path):
-    """No --spec: the sections spec (ADR 0003)."""
+    """The CLI compiles the sections spec from --bundle-schema and --column-set (ADR 0006, ADR 0009)."""
     monkeypatch.setattr(build_mod, "resolve_build_inputs", lambda args: _fixture_inputs())
-    rc = run_build_command(_args(full="x", out=tmp_path / "o", tables="gene, submitter,allele"))
-    assert rc == 0
+    args = _args(
+        full="x",
+        out=tmp_path / "o",
+        tables="gene, submitter,allele",
+        bundle_schema=str(CLINVAR_SCHEMA),
+        column_set=str(CLINVAR_COLUMNS),
+    )
+    assert run_build_command(args) == 0
     out = capsys.readouterr().out
     n = COUNTS["gene"] + COUNTS["submitter"] + COUNTS["allele"]
     assert f"built 3 table(s) of spec sections 1.0, {n} rows" in out
     kv = _kv(duckdb.connect(), tmp_path / "o" / "gene.parquet")
     assert kv[KV_PREFIX + "table_spec"] == "sections" and KV_PREFIX + "selection" not in kv
+    assert kv[KV_PREFIX + "table_spec_sha256"] == SPEC_SOURCE.sha256
+    with pytest.raises(InputError, match="--bundle-schema and --column-set are required"):
+        run_build_command(_args(full="x", out=tmp_path / "o2", bundle_schema=str(CLINVAR_SCHEMA)))
 
 
-def test_build_api_defaults_to_sections(tmp_path):
-    """build() with no spec writes the sections spec, as the CLI does with no --spec."""
-    res = build(_fixture_inputs(), tmp_path / "o", tables=["gene"])
+def test_build_api_needs_a_spec(tmp_path):
+    """build() has no default spec: the caller compiles one (compiled.compile_pairing)."""
+    with pytest.raises(TypeError, match="spec"):
+        build(_fixture_inputs(), tmp_path / "o", tables=["gene"])
+    res = build(_fixture_inputs(), tmp_path / "o", tables=["gene"], spec=SPEC, spec_source=SPEC_SOURCE)
     assert [t.table for t in res.tables] == ["gene"]
     kv = _kv(duckdb.connect(), tmp_path / "o" / "gene.parquet")
     assert (kv[KV_PREFIX + "table_spec"], kv[KV_PREFIX + "table_spec_version"]) == ("sections", "1.0")
@@ -569,21 +570,3 @@ def test_build_and_verify_real_fixture(passthrough, tmp_path):
     groups = bundle_recompute(tmp_path / "a", _fixture_inputs(), spec=spec, work_dir=tmp_path / "rc")
     assert len(groups) == len(SECTIONS) and not any(recompute_failed(g) for g in groups)
     assert not (tmp_path / "rc").exists() or not list((tmp_path / "rc").iterdir())
-
-
-def test_build_fixture_end_to_end(tmp_path):
-    """The real spec and table SQL on the raw fixture."""
-    from gkm_bundle_parquet.spec import load_spec
-
-    spec = load_spec("1.0")
-    if not set(SECTIONS) <= spec.sections:
-        pytest.skip("needs spec/1.0 to cover every bundle section (table-spec work package)")
-    try:
-        res = build(_fixture_inputs(), tmp_path / "out", spec=spec)
-    except NotImplementedError as e:
-        pytest.skip(f"needs the table-spec work package: {e!r}")
-    from gkm_bundle_parquet.verify import verify_dir
-
-    assert verify_dir(tmp_path / "out") == []
-    res2 = build(_fixture_inputs(), tmp_path / "out2", spec=spec, threads=4)
-    assert [t.sha256 for t in res.tables] == [t.sha256 for t in res2.tables]

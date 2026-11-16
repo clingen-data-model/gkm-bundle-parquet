@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from _fixture import CLINVAR_SCHEMA
 
-from gkm_bundle_parquet.default_pairing import schema_source
 from gkm_bundle_parquet.errors import SchemaSetError
 from gkm_bundle_parquet.schemas import (
     MANIFEST,
@@ -207,23 +207,23 @@ def test_a_set_on_disk_whose_refs_leave_the_set_is_refused(tmp_path):
         read_set(tmp_path)
 
 
-# --- the shipped snapshot ----------------------------------------------------------------------------------------
+# --- a vendored set (ClinVar-GKM's 1.1.0, a fixture) -------------------------------------------------------------
 
 
 def _no_fetch(url):
     raise AssertionError(f"fetched {url}")
 
 
-def test_the_snapshot_is_used_without_any_fetch():
-    source = schema_source("1.1.0")
+def test_a_vendored_set_is_used_without_any_fetch():
+    source = str(CLINVAR_SCHEMA)
     s = load_schema_set(source, fetch=_no_fetch)
     assert s.sha256 == "741a29fcd86f07003f0d27d6c94ba0b414ec8f69fae479cb76cc67c4de47d798"
     assert s.bundle["properties"]["schema_version"]["const"] == "1.1.0"
     assert all(f.id == f.url for f in s.files.values() if f.id != s.bundle_id)
 
 
-def test_the_snapshot_keeps_original_bytes_and_lists_every_file():
-    directory = Path(schema_source("1.1.0"))
+def test_a_vendored_set_keeps_original_bytes_and_lists_every_file():
+    directory = CLINVAR_SCHEMA
     manifest = json.loads((directory / MANIFEST).read_text())
     listed = {e["file"] for e in manifest["files"]}
     on_disk = {str(p.relative_to(directory)) for p in directory.rglob("*") if p.is_file() and p.name != MANIFEST}
@@ -244,6 +244,6 @@ def test_vendor_script_writes_a_set_a_build_can_read_with_no_network(tmp_path):
 
 
 @pytest.mark.network
-def test_fetching_1_1_0_by_url_gives_the_snapshot():
+def test_fetching_1_1_0_by_url_gives_the_vendored_set():
     url = "https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/clinvar-gkm-bundle.schema.json"
-    assert fetch_set(url).sha256 == load_schema_set(schema_source("1.1.0")).sha256
+    assert fetch_set(url).sha256 == load_schema_set(str(CLINVAR_SCHEMA)).sha256

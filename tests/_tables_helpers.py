@@ -1,5 +1,5 @@
 """Load the bundle fixture (tests/_fixture.py) into DuckDB `bundle_<section>` tables and build spec tables
-over them.
+over them with the generic renderer.
 
 The fixture is tiny, so it is parsed with the stdlib here (the bundle line format of design plan §4.2) rather
 than through the reader, which is another work package. `record` keeps the exact bytes of the bundle line.
@@ -13,18 +13,10 @@ import re
 from pathlib import Path
 
 import duckdb
-from _fixture import FIXTURE
+from _fixture import FIXTURE, SECTIONS
 
-from gkm_bundle_parquet.spec import Table, load_spec
-from gkm_bundle_parquet.sqltemplate import macros_sql, render
-
-SPEC = load_spec("1.0")
-# The 20 sections of the 1.1.0 bundle schema (design plan §4.2).
-SECTIONS = (
-    "sequenceReference location allele copyNumberCount copyNumberChange gene variation condition conditionSet "
-    "therapy therapyGroup submitter propositionPathogenicity propositionOncogenicity "
-    "propositionSomaticClinicalImpact propositionClinvarCustom evidenceLine scv vcv rcv"
-).split()
+from gkm_bundle_parquet.spec import Table
+from gkm_bundle_parquet.sqltemplate import macros_sql, render_generic
 
 _SECTION = re.compile(r'^  "(\w+)": \{$')
 _RECORD = re.compile(r'^    ("(?:[^"\\]|\\.)*"): (.*?),?$')
@@ -83,9 +75,9 @@ def connect(sections: dict[str, list[tuple[str, str]]] | None = None) -> duckdb.
 
 def build(con: duckdb.DuckDBPyConnection, table: Table, fast: bool = True) -> str:
     """Build the table as build.py will (SELECT * FROM (<sql>) ORDER BY <sort key>); returns its name. fast=False
-    builds from the slow reference SQL (render(table, fast=False))."""
+    builds from the slow reference SQL (render_generic(table, fast=False))."""
     name = f"out_{table.name}" if fast else f"out_{table.name}_slow"
-    sql = render(table, fast=fast)
+    sql = render_generic(table, fast=fast)
     con.execute(f'CREATE OR REPLACE TABLE "{name}" AS SELECT * FROM ({sql}) ORDER BY "{table.sort_key}"')
     return name
 

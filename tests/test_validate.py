@@ -1,7 +1,7 @@
 """`validate`: the rs engine (jsonschema-rs) gives the same verdict as the python engine (the GKM Toolkit's
 reference validator) on real records and on negative cases generated from them, with the published 1.1.0 schema set
-and the narrowed ClinVar-GKM set (tests/fixtures/schema-sets/, see its README). docs/validate.md has the full-size
-runs.
+(tests/fixtures/clinvar-gkm) and the narrowed ClinVar-GKM set (tests/fixtures/schema-sets/, see its README).
+docs/validate.md has the full-size runs.
 
 The python engine needs the reference extra (`ga4gh.gkm`, Python 3.11+); without it, the tests that use it skip.
 """
@@ -16,12 +16,11 @@ from pathlib import Path
 
 import jsonschema_rs
 import pytest
-from _fixture import COUNTS, FIXTURE, FIXTURES
+from _fixture import CLINVAR_SCHEMA, COUNTS, FIXTURE, FIXTURES
 from _input_helpers import bundle_bytes, fixture_sections, write_gz
 from _validate_cases import UNDECLARED, ban_cases, banned_properties, list_item_cases, nodes, record_cases, records
 
 from gkm_bundle_parquet.cli import main
-from gkm_bundle_parquet.default_pairing import schema_source
 from gkm_bundle_parquet.errors import SchemaSetError
 from gkm_bundle_parquet.schemas import SchemaFile, SchemaSet, load_schema_set, read_set
 from gkm_bundle_parquet.validate import make_engine
@@ -42,7 +41,7 @@ needs_reference = pytest.mark.skipif(not HAVE_REFERENCE, reason="needs the refer
 
 @cache
 def schema_set(name: str) -> SchemaSet:
-    return read_set(NARROWED) if name == "narrowed" else load_schema_set(schema_source("1.1.0"))
+    return read_set(NARROWED) if name == "narrowed" else load_schema_set(str(CLINVAR_SCHEMA))
 
 
 @cache
@@ -92,8 +91,9 @@ def test_narrowed_fixture_is_the_recorded_commit():
 )
 def test_cli_passes_the_fixture(tmp_path, set_name, engine_name):
     out = tmp_path / "counts.json"
-    schema = str(NARROWED) if set_name == "narrowed" else schema_source("1.1.0")
-    argv = ["validate", str(FIXTURE), "--bundle-schema", schema, "--engine", engine_name, "--workers", "2"]
+    schema = str(NARROWED if set_name == "narrowed" else CLINVAR_SCHEMA)
+    argv = ["validate", str(FIXTURE), "--bundle-schema", schema, "--version-property", "schema_version"]
+    argv += ["--engine", engine_name, "--workers", "2"]
     assert main([*argv, "--json", str(out)]) == 0
     result = json.loads(out.read_text())
     assert result["failing"] == 0
@@ -147,8 +147,9 @@ def test_cli_stops_on_an_unknown_section_and_a_missing_version(tmp_path, capsys)
     assert main(["validate", str(bundle), "--bundle-schema", str(NARROWED), "--workers", "1"]) == 2
     assert "notASection" in capsys.readouterr().err
     text = gzip.decompress(FIXTURE.read_bytes()).replace(b'  "schema_version": "1.1.0",\n', b"")
-    no_version = write_gz(tmp_path / "nv.json.gz", text)
-    assert main(["validate", str(no_version), "--bundle-schema", str(NARROWED), "--workers", "1"]) == 2
+    no_version = str(write_gz(tmp_path / "nv.json.gz", text))
+    argv = ["validate", no_version, "--bundle-schema", str(NARROWED), "--version-property", "schema_version"]
+    assert main([*argv, "--workers", "1"]) == 2
     assert "schema_version" in capsys.readouterr().err
 
 
@@ -208,7 +209,7 @@ def test_cli_validates_a_bundle_whose_schema_declares_no_version(tmp_path, capsy
 def test_cli_without_the_schema_or_with_a_version_property_it_lacks_still_stops(tmp_path, capsys):
     bundle = str(next(CIVIC.glob("civic-assertion-*-bundle.json")))
     assert main(["validate", bundle, "--workers", "1"]) == 2
-    assert "schema_version" in capsys.readouterr().err
+    assert "--bundle-schema is required" in capsys.readouterr().err
     argv = ["validate", bundle, "--bundle-schema", str(CIVIC_SCHEMA), "--version-property", "schema_version"]
     assert main([*argv, "--workers", "1"]) == 2
     assert "schema_version" in capsys.readouterr().err

@@ -1,32 +1,66 @@
+"""`version`: the compatibility data names no producer's schema_version (ADR 0009, row 0002), and the commands
+that read a bundle stop without its schema."""
+
 import json
 
+import pytest
+
 from gkm_bundle_parquet.cli import main
-from gkm_bundle_parquet.compat import TABLE_SPEC_VERSION
+from gkm_bundle_parquet.compiler import RULES_VERSION
 
 
 def test_version_json(capsys):
     assert main(["version", "--json"]) == 0
     info = json.loads(capsys.readouterr().out)
-    assert info["table_spec_version"] == TABLE_SPEC_VERSION
-    assert info["snapshotted_schema_versions"] == ["1.1.0"]
-    assert "sections compiles any bundle from its schema and column set" in info["schema_version_rule"]
-    assert "accepted_schema_versions" not in info  # it can't state a closed list any more (ADR 0006 §6)
+    assert (info["table_spec"], info["table_spec_version"]) == ("sections", RULES_VERSION)
+    assert "no producer's schema_version is built in" in info["schema_version_rule"]
+    for gone in ("snapshotted_schema_versions", "accepted_schema_versions", "table_specs", "tables"):
+        assert gone not in info
+    assert info["kv_prefix"] == "gkm_bundle_parquet."
+    assert info["reads_kv_prefixes"] == ["gkm_bundle_parquet.", "clinvar_gkm_parquet."]
     assert info["duckdb_version"] == "1.5.4"
-    assert info["tables"]
-    assert info["default_table_spec"] == "sections"
-    specs = {s["name"]: s for s in info["table_specs"]}
-    assert set(specs) == {"sections", "baseline", "clinvar-gkm"} and specs["sections"]["default"]
-    assert specs["sections"]["compiled"] and not specs["baseline"]["compiled"]
-    assert (
-        specs["baseline"]["deprecated"]
-        and specs["clinvar-gkm"]["deprecated"]
-        and not specs["sections"]["deprecated"]
-    )
-    assert len(specs["sections"]["tables_by_schema_version"]["1.1.0"]) == len(specs["baseline"]["tables"]) == 20
-    assert len(specs["clinvar-gkm"]["tables"]) == 22
+    assert set(info["validate_engines"]) == {"rs", "python"}
 
 
 def test_version_text(capsys):
     assert main(["version"]) == 0
     out = capsys.readouterr().out
-    assert "built-in table specs sections 1.0 (draft, default), baseline 1.0 (" in out and "clinvar-gkm 1.0" in out
+    assert out.startswith("gkm-bundle-parquet ") and f"table spec sections {RULES_VERSION}; duckdb 1.5.4" in out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["build", "--full", "b.json.gz", "--out", "o"],
+        ["build", "--full", "b.json.gz", "--out", "o", "--bundle-schema", "s"],
+        ["select", "--full", "b.json.gz", "--out", "o.json.gz", "--driver", "t", "--column-set", "c.yaml"],
+        ["compile-spec"],
+    ],
+)
+def test_no_pairing_is_a_clear_error(capsys, argv):
+    assert main(argv) == 2
+    err = capsys.readouterr().err
+    assert "--bundle-schema and --column-set are required" in err and "no default bundle" in err
+
+
+def test_validate_needs_the_schema(capsys):
+    assert main(["validate", "b.json.gz"]) == 2
+    assert "--bundle-schema is required" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["build", "--full", "b", "--out", "o", "--release", "latest"],
+        ["build", "--full", "b", "--out", "o", "--delta", "d"],
+        ["build", "--full", "b", "--out", "o", "--spec", "baseline"],
+        ["verify", "d", "--against", "r"],
+        ["verify", "d", "--index", "i"],
+        ["compile-spec", "1.1.0"],
+        ["validate", "b", "--index", "i"],
+    ],
+)
+def test_removed_options_are_refused(capsys, argv):
+    with pytest.raises(SystemExit) as e:
+        main(argv)
+    assert e.value.code == 2 and "unrecognized arguments" in capsys.readouterr().err

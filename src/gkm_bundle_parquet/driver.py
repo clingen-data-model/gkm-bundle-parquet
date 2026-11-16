@@ -13,9 +13,9 @@ picks the record source and runs the engine:
   nor explicit keys, every key of the driver table is selected (for a row-filter table, only its rows).
 - **Explicit keys** (`--ids`, `--ids-file`) are added to the `--where` keys (their union). They need no staging
   pass; the engine fails on any the driver section doesn't hold.
-- **The source.** The bundle is read by select.BundleFileSource. Given a pairing (`--bundle-schema`,
-  `--column-set`), the source's root is read by the pairing's rules: its version property, if any, and its
-  sections (ADR 0008 decision 4.1, ADR 0009); without one, by the default bundle's.
+- **The source.** The bundle is read by select.BundleFileSource, its root by the spec's rules
+  (compiled.reader_rules): the pairing's version property, if any, and its sections (ADR 0008 decision 4.1,
+  ADR 0009).
 - **Provenance.** `driver`, `where` and `ids_sha256` (select.ids_sha256 of the explicit keys, or null) join the
   engine's parameters in `SelectionResult.metadata_json()`, the `gkm_bundle_parquet.selection` entry.
 
@@ -29,18 +29,17 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 
 from . import build, compiled, select, sqltemplate
 from .build import SectionPipeline, key_column, sql_ident
-from .bundle import RootRules
 from .errors import InputError
 from .model import BuildInputs, InputFile, StreamedBundle
 from .select import SelectionError, SelectionResult
-from .spec import Spec, Table, is_compiled, resolve_spec
+from .spec import Spec, Table
 
 # The mini-bundle a build writes in its work directory.
 SELECTION_BUNDLE_NAME = "gkm-bundle-parquet_selection.json.gz"
@@ -56,7 +55,6 @@ class Driver:
     follow: str = "out"
     max_depth: int | None = None
     sections: tuple[str, ...] | None = None
-    rules: RootRules | None = None  # how to read the source's root: a pairing's (None: the default bundle's)
 
 
 @dataclass(frozen=True)
@@ -153,13 +151,6 @@ def driver_from_args(args) -> Driver | None:
     )
 
 
-def with_pairing_rules(drv: Driver | None, spec: Spec, pairing: tuple[str | None, str | None]) -> Driver | None:
-    """The driver, reading the source's root by the spec's rules when a pairing compiled it."""
-    if drv is None or pairing[0] is None:
-        return drv
-    return replace(drv, rules=compiled.reader_rules(spec))
-
-
 # --- the driver keys and the selection -------------------------------------------------------------------------
 
 
@@ -243,7 +234,7 @@ def run_selection(
             f"no driver keys: {cond} matches no row of driver table {table.name} (section {section}, spec "
             f"{spec.label}), and no --ids were given; nothing to select"
         )
-    source = select.BundleFileSource(inputs.full, rules=drv.rules)
+    source = select.BundleFileSource(inputs.full, rules=compiled.reader_rules(spec))
     provenance = {
         "driver": table.name,
         "where": drv.where,
@@ -295,17 +286,12 @@ def run_selection(
 def run_select_command(args) -> int:
     """`gkm-bundle-parquet select`: write only the mini-bundle, and print the selection entry a build from it
     would carry. The same inputs and options give the same bytes."""
-    spec_arg = getattr(args, "spec", None)
-    if not is_compiled(spec_arg):
-        resolve_spec(spec_arg)  # a bad --spec is reported before any input is touched
+    spec, _ = build.resolve_pairing(args)  # a bad pairing is reported before the bundle is touched
     drv = driver_from_args(args)
     out = Path(args.out)
     if out.exists():
         raise InputError(f"{out} already exists; select writes a new file")
-    pairing = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
     inputs = build.resolve_build_inputs(args)
-    spec, _ = build.resolve_spec_for(spec_arg, inputs, *pairing)
-    drv = with_pairing_rules(drv, spec, pairing)
     driver_table(spec, drv)
     root = Path(args.work_dir) if args.work_dir else out.parent
     root.mkdir(parents=True, exist_ok=True)
