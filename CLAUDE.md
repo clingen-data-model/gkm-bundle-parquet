@@ -17,7 +17,7 @@ working on matching files); one-off decisions live in `docs/decisions/` (ADRs). 
 This repo builds a downloadable, versioned tool that turns **GKM JSON bundles** into Parquet and back, and validates
 them: any bundle built on the GA4GH GKM classes (VRS, Cat-VRS, VA-Spec), with that bundle's JSON Schema. The end
 state is in [ADR 0008](docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md) (accepted) and
-[ADR 0009](docs/decisions/0009-generic-gkm-bundle-tool-renamed.md) (proposed):
+[ADR 0009](docs/decisions/0009-generic-gkm-bundle-tool-renamed.md) (accepted):
 
 - **No producer is built in.** The tool names no producer and assumes none; each run is given the bundle's schema.
   The first producer is [ClinVar-GKM](https://github.com/clingen-data-model/clinvar-gkm) (local clone:

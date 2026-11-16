@@ -8,7 +8,7 @@
 retired, so their explicit `schema_version` lists go with them; ADR 0006's gate (the pairing loads and compiles) applies to
 every set.
 
-**Amended by [ADR 0009](./0009-generic-gkm-bundle-tool-renamed.md) (proposed, 2026-11-11):** the compatibility matrix
+**Amended by [ADR 0009](./0009-generic-gkm-bundle-tool-renamed.md) (accepted 2026-11-16):** the compatibility matrix
 lists no producer's `schema_version`s; a release reads any bundle whose given schema loads and compiles. The tool is
 renamed `gkm-bundle-parquet` in 2.0.0.
 

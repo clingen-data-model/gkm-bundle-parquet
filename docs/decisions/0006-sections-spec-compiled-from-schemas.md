@@ -10,7 +10,7 @@
 **Amended by [ADR 0008](./0008-end-state-reversible-default-custom-projections-filters.md) (accepted 2026-11-11):** the default needs no column set (proposed ADR 0007);
 selection accepts a pairing, while deltas still don't; a custom column set may declare itself a projection.
 
-**Amended by [ADR 0009](./0009-generic-gkm-bundle-tool-renamed.md) (proposed, 2026-11-11):** the default bundle
+**Amended by [ADR 0009](./0009-generic-gkm-bundle-tool-renamed.md) (accepted 2026-11-16):** the default bundle
 (`spec/sections/default-bundle.yaml`, the shipped schema snapshot and column set) goes; a schema is always given.
 
 ## Context

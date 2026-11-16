@@ -10,14 +10,14 @@ The JSON bundles are the public record. Parquet is a derived convenience: a quic
 content with current database tools such as DuckDB, Polars, pandas and Spark. Every Parquet value can be recomputed from
 the bundle it came from ([ADR 0001](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0001-parquet-derived-from-bundles.md)).
 
-> **Status:** 1.0.1 is the latest release. Two accepted or proposed decisions reshape the tool for 2.0.0 (planned):
+> **Status:** 1.0.1 is the latest release. Two accepted decisions reshape the tool for 2.0.0 (planned):
 >
 > - [ADR 0008](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md)
 >   (accepted): the default Parquet set is generated from the bundle schema alone and rebuilds the bundle record for
 >   record. Custom column sets are labelled projections, and filters work in both directions. The `clinvar-gkm` and
 >   `baseline` specs and hand-written `tables.yaml` input are retired.
 > - [ADR 0009](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0009-generic-gkm-bundle-tool-renamed.md)
->   (proposed): the tool names no producer and is renamed **`gkm-bundle-parquet`**. Every command takes the bundle's
+>   (accepted): the tool names no producer and is renamed **`gkm-bundle-parquet`**. Every command takes the bundle's
 >   schema (`--bundle-schema`), and none defaults to ClinVar-GKM. ClinVar-GKM's release model (its line index, monthly,
 >   weekly and delta files, and replay) moves to ClinVar-GKM. The repository already has the new name (2026-11-16); the
 >   package and command keep the old one until 2.0.0.
