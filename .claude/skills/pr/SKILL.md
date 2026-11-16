@@ -1,6 +1,6 @@
 ---
 name: pr
-description: Open a pull request for clinvar-gkm-parquet. Use when the user asks to commit and open a PR, or to push a branch for review.
+description: Open a pull request for gkm-bundle-parquet. Use when the user asks to commit and open a PR, or to push a branch for review.
 ---
 
 # Create a PR

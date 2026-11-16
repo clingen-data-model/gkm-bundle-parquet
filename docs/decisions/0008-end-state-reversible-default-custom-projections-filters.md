@@ -6,7 +6,11 @@
   supersedes [ADR 0003](0003-pluggable-table-specs.md); amends [ADR 0001](0001-parquet-derived-from-bundles.md),
   [ADR 0002](0002-independent-tool-versioning.md), [ADR 0004](0004-driver-based-selection.md),
   [ADR 0005](0005-lossless-sections-build.md), [ADR 0006](0006-sections-spec-compiled-from-schemas.md) and the proposed
-  ADR 0007 ([PR #13](https://github.com/clingen-data-model/clinvar-gkm-parquet/pull/13))
+  ADR 0007 ([PR #13](https://github.com/clingen-data-model/gkm-bundle-parquet/pull/13))
+
+**Amended by [ADR 0009](./0009-generic-gkm-bundle-tool-renamed.md) (accepted 2026-11-16):** its work order gains ADR
+0009's items (generic selection and validation, the rename, the release model moving to ClinVar-GKM, no default
+producer), all in the same 2.0.0.
 
 ## Context
 
