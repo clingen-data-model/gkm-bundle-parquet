@@ -2,8 +2,27 @@ name: ci
 
 on:
   pull_request:
+    # A PR that changes only docs runs no tests. Later patterns win, so the files a test reads
+    # (docs/column-set-format.md, the spec and fixture READMEs) and all code still run the suite.
+    paths:
+      - "**"
+      - "!**.md"
+      - "!docs/**"
+      - "!.claude/**"
+      - "!LICENSE"
+      - "docs/column-set-format.md"
+      - "src/**"
+      - "spec/**"
+      - "schemas/**"
+      - "tests/**"
+      - "scripts/**"
   push:
     branches: [main]
+
+# A newer push to a PR cancels its older runs; runs on main always finish.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -24,4 +43,4 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check
       - run: uv run ruff format --check
-      - run: uv run pytest
+      - run: uv run pytest -n auto
