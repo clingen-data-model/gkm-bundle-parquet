@@ -611,8 +611,8 @@ def test_the_version_is_found_in_any_layout(tmp_path, data, version):
 @pytest.mark.parametrize(
     "data, message",
     [
-        (gzip.compress(b""), "empty file"),
-        (gzip.compress(b"[\n"), "not a JSON bundle"),
+        (gzip.compress(b"", mtime=0), "empty file"),
+        (gzip.compress(b"[\n", mtime=0), "not a JSON bundle"),
         (b"not gzip", "not a complete gzip stream"),
     ],
 )
