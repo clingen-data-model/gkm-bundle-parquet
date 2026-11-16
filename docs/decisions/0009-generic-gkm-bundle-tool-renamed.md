@@ -1,6 +1,6 @@
 # 0009 — A generic GKM bundle tool, renamed gkm-bundle-parquet
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-16)
 - **Date:** 2026-11-11
 - **Plan (if any):** none; the work order is below. Amends [ADR 0001](0001-parquet-derived-from-bundles.md),
   [ADR 0002](0002-independent-tool-versioning.md), [ADR 0004](0004-driver-based-selection.md),
