@@ -392,6 +392,17 @@ def test_no_retry_on_404(fake_http):
     assert len(calls) == 1
 
 
+def test_closing_a_stream_whose_request_failed(fake_http):
+    # The request raises in __init__, so close() (called by the finalizer) must not need a response.
+    _, _, script = fake_http
+    script.append(_raise(_http_error("x", 404)))
+    stream = transport._HttpStream.__new__(transport._HttpStream)
+    with pytest.raises(InputError, match="HTTP 404"):
+        stream.__init__(f"{BASE}/{L}x.json.gz")
+    stream.close()
+    assert stream.closed
+
+
 def test_gives_up(fake_http):
     calls, _, script = fake_http
     script.extend([_raise(_http_error("x", 500))] * transport.MAX_ATTEMPTS)

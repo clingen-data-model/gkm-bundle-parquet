@@ -92,6 +92,7 @@ class _HttpStream(io.RawIOBase):
         self.pos = 0
         self.length: int | None = None
         self.validator: str | None = None
+        self._resp = None  # set before the request, so close() works when it fails
         self._resp = self._open()
 
     def readable(self) -> bool:
@@ -147,7 +148,8 @@ class _HttpStream(io.RawIOBase):
     def close(self) -> None:
         if not self.closed:
             try:
-                self._resp.close()
+                if self._resp is not None:
+                    self._resp.close()
             finally:
                 super().close()
 
