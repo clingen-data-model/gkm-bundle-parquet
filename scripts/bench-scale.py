@@ -15,17 +15,13 @@ with its own key's text (e.g. its `id`) replaced the same way, so replicas diffe
 pointers are kept and need not resolve, since the tool never resolves them. The bundle keeps the assembler's line
 layout (design plan §4.2) and its gzip level 3.
 
-With --deltas it also writes 2 synthetic deltas (+ manifests in build-delta-manifest.py's shape): each updates,
-adds and deletes about 0.5 % of each section's keys (an update carries another record of the same section and,
-for evidence lines, of the same id shape).
-
 Then it runs the build as a subprocess (this interpreter, `-m gkm_bundle_parquet.cli build`) and records: wall
 time; peak RSS of the child (os.wait4); peak disk, sampled every 0.5 s as the allocated bytes under the build's
 work and output directories (the input bundle is not counted); and the output size. Scratch data lives in a new
 temporary directory under --dir and is deleted afterwards unless --keep.
 
 Usage:
-    scripts/bench-scale.py --scale-mb 300 [--deltas] [--dir DIR] [--json OUT] [--keep] [-- build args...]
+    scripts/bench-scale.py --scale-mb 300 [--dir DIR] [--json OUT] [--keep] [-- build args...]
 
 Run it with the interpreter of the environment whose tool you want to measure (e.g. `uv run python
 scripts/bench-scale.py ...`).
@@ -49,18 +45,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "tests/fixtures/real-1.1.0/clinvar-gkm_excerpt.json.gz"
 PROVENANCE = FIXTURE.parent / "PROVENANCE.json"
-FULL_SOURCE_RELEASE = "2026-10-18"
-DELTA_RELEASES = ("2026-10-25", "2026-11-01")
 GZIP_LEVEL = 3  # the assembler's level
 
 _SECTION = re.compile(rb'^  "([^"]+)": \{$')
 _RECORD = re.compile(rb'^    ("(?:[^"\\]|\\.)*"): (.*?),?$')
 _DIGITS = re.compile(rb"[0-9]+")
-_EL_SHAPES = (
-    re.compile(rb'^"clinvar\.submission:SCV[0-9]+\.[0-9]+"$'),
-    re.compile(rb'^"VCV[0-9]+\.[0-9]+-'),
-    re.compile(rb'^"RCV[0-9]+\.[0-9]+-'),
-)
 
 
 def read_sections(path: Path) -> dict[str, list[tuple[bytes, bytes]]]:
@@ -126,59 +115,6 @@ def write_bundle(path: Path, sections, reps: dict[str, int]) -> int:
     return size
 
 
-def _shape(section: str, key: bytes) -> int:
-    if section != "evidenceLine":
-        return 0
-    return next(i for i, p in enumerate(_EL_SHAPES) if p.match(key))
-
-
-def write_deltas(out: Path, sections, reps: dict[str, int]) -> list[Path]:
-    """Two synthetic deltas; returns the delta bundle paths, oldest first."""
-    paths = []
-    baseline = FULL_SOURCE_RELEASE
-    for d, release in enumerate(DELTA_RELEASES, start=1):
-        upserts: dict[str, list[tuple[bytes, bytes]]] = {}
-        deleted: dict[str, list[str]] = {}
-        for name, recs in sections.items():
-            n = reps[name]
-            by_shape: dict[int, list[bytes]] = {}
-            for k, r in recs:
-                by_shape.setdefault(_shape(name, k), []).append(r)
-            m = max(1, n // 200)  # replicas touched per change kind: about 0.5 % of the keys each
-            ups, dels = [], []
-            for i in range(m):
-                rep_upd = (d * 3 * m + i) % n
-                rep_del = (d * 3 * m + m + i) % n
-                for j, (k, _) in enumerate(recs):
-                    pool = by_shape[_shape(name, k)]
-                    ups.append((replica_key(k, rep_upd), pool[(j + d) % len(pool)]))  # update
-                    ups.append(replica(k, recs[j][1], n + (d - 1) * m + i))  # add
-                    if rep_del != rep_upd:
-                        dels.append(json.loads(replica_key(k, rep_del)))
-            upserts[name], deleted[name] = ups, dels
-        compact = release[:7] + release[8:]
-        bpath = out / f"clinvar-gkm-delta_{compact}.json.gz"
-        text = bytearray(b'{\n  "schema_version": "1.1.0"')
-        for name, recs in upserts.items():
-            text += b',\n  "' + name.encode() + b'": {\n'
-            text += b",\n".join(b"    " + k + b": " + r for k, r in recs)
-            text += b"\n  }"
-        text += b"\n}\n"
-        bpath.write_bytes(gzip.compress(bytes(text), compresslevel=GZIP_LEVEL, mtime=0))
-        manifest = {
-            "release": release,
-            "baseline_release": baseline,
-            "compare_release": release,
-            "pipeline_version": "synthetic (bench-scale.py)",
-            "checkpoint_full": None,
-            "sections": {s: {"added": 0, "updated": 0, "deleted": keys} for s, keys in deleted.items()},
-        }
-        (out / f"clinvar-gkm-delta_{compact}.manifest.json").write_text(json.dumps(manifest))
-        paths.append(bpath)
-        baseline = release
-    return paths
-
-
 def _allocated(dirs: list[Path]) -> int:
     total = 0
     for d in dirs:
@@ -224,7 +160,6 @@ def _mb(n: int) -> str:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scale-mb", type=float, required=True, help="uncompressed JSON size of the full, MB")
-    p.add_argument("--deltas", action="store_true", help="also write and replay 2 synthetic deltas")
     p.add_argument("--dir", type=Path, help="where to make the scratch directory (default: the system temp dir)")
     p.add_argument("--json", type=Path, help="write the result here as JSON")
     p.add_argument("--keep", action="store_true", help="keep the scratch data")
@@ -241,18 +176,15 @@ def main() -> int:
         full = inp / "clinvar-gkm_bench.json.gz"
         t0 = time.monotonic()
         raw_size = write_bundle(full, sections, reps)
-        deltas = write_deltas(inp, sections, reps) if args.deltas else []
         records = sum(reps[s] * len(r) for s, r in sections.items())
         print(
             f"bundle: {records} records, {_mb(raw_size)} JSON, {_mb(full.stat().st_size)} gzip "
-            f"({time.monotonic() - t0:.0f} s to write); {len(deltas)} delta(s)",
+            f"({time.monotonic() - t0:.0f} s to write)",
             flush=True,
         )
         out, work = scratch / "out", scratch / "work"
         cmd = [sys.executable, "-m", "gkm_bundle_parquet.cli", "build", "--full", str(full)]
-        cmd += ["--full-source-release", FULL_SOURCE_RELEASE, "--out", str(out), "--work-dir", str(work)]
-        for d in deltas:
-            cmd += ["--delta", str(d)]
+        cmd += ["--out", str(out), "--work-dir", str(work)]
         cmd += args.build_args
         res = run_build(cmd, [out, work])
         if res["rc"] != 0:
@@ -265,7 +197,6 @@ def main() -> int:
             "section_records": {s: reps[s] * len(r) for s, r in sections.items()},
             "json_bytes": raw_size,
             "gzip_bytes": full.stat().st_size,
-            "deltas": len(deltas),
             "wall_s": res["wall_s"],
             "peak_rss": res["peak_rss"],
             "peak_disk": res["peak_disk"],

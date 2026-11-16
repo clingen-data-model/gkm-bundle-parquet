@@ -15,14 +15,6 @@ CIVIC_PAIRING = ["--bundle-schema", str(CIVIC / "schema-set"), "--column-set", s
 CUSTOM_SPEC = str(FIXTURES / "custom-spec" / "tables.yaml")
 F = ["--full", "b.json.gz", "--out", "o"]
 
-RELEASE = (
-    "--{} is removed in 2.0.0; resolve the release yourself and pass one bundle with --full and --sha256, or a "
-    "<file>.sha256 sidecar"
-)
-VALIDATE_INDEX = (
-    "--index is removed in 2.0.0; resolve the release yourself and pass the bundle and --sha256, or a "
-    "<file>.sha256 sidecar"
-)
 SPEC = (
     "--spec {} ({}) is removed in 2.0.0 (ADR 0008); use the default sections spec with --bundle-schema and "
     "--column-set, and a column set for other tables"
@@ -75,28 +67,10 @@ def warnings(capsys, argv: list[str]) -> list[str]:
         (["verify", "d", "--against", "ref"], [AGAINST]),
         (["verify", "d"], []),
         (["verify", "d", "--roundtrip", "--full", "b.json.gz"], []),
-        (
-            ["build", "--release", "latest", "--index", "i.json", "--out", "o"],
-            [RELEASE.format("release"), RELEASE.format("index"), DEFAULT.format(PAIR)],
-        ),
-        (
-            ["build", *F, "--delta", "d.json.gz", "--manifest", "m.json", "--full-source-release", "2026-10-18"],
-            [
-                RELEASE.format("delta"),
-                RELEASE.format("manifest"),
-                RELEASE.format("full-source-release"),
-                DEFAULT.format(PAIR),
-            ],
-        ),
-        (
-            ["verify", "d", "--bundle-recompute", "--full", "b.json.gz", "--delta", "d.json.gz", "--index", "i"],
-            [RELEASE.format("index"), RELEASE.format("delta")],
-        ),
         (["compile-spec", "1.1.0"], [COMPILE]),
         (["compile-spec", *CIVIC_PAIRING], []),
         (["validate", "b.json.gz"], [DEFAULT.format("--bundle-schema")]),
         (["validate", "b.json.gz", "--bundle-schema", "s"], []),
-        (["validate", "b.json.gz", "--bundle-schema", "s", "--index", "i"], [VALIDATE_INDEX]),
     ],
 )
 def test_each_deprecated_use_says_so_once(capsys, argv, want):
@@ -107,11 +81,10 @@ def test_a_deprecated_build_still_builds_with_the_same_exit_code_and_stdout(tmp_
     """The warnings come before the work and change nothing after it: the default build of the excerpt, with a
     deprecated option, prints what it printed before (the files themselves are compared in the release PR)."""
     out = tmp_path / "o"
-    rc = main(["build", "--full", str(FIXTURE), "--full-source-release", "2026-10-31", "--out", str(out)])
+    rc = main(["build", "--full", str(FIXTURE), "--out", str(out)])
     got = capsys.readouterr()
     assert rc == 0
     assert got.out.startswith("built 20 table(s) of spec sections 1.0") and PREFIX not in got.out
     assert [line for line in got.err.splitlines() if line.startswith(PREFIX)] == [
-        PREFIX + RELEASE.format("full-source-release"),
         PREFIX + DEFAULT.format(PAIR),
     ]

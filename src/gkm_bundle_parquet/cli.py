@@ -17,15 +17,13 @@ SPEC_HELP = (
 )
 
 
+FULL_HELP = "the bundle: a path or URL (.json or .json.gz)"
+SHA256_HELP = "the bundle's expected sha256 (default: its <file>.sha256 sidecar, when there is one)"
+
+
 def _inputs(p: argparse.ArgumentParser) -> None:
-    src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--full", help="a full bundle: an official monthly or a weekly full (path or URL)")
-    src.add_argument("--release", help="latest | YYYY-MM-DD: resolve the inputs from the line index")
-    p.add_argument("--delta", action="append", default=[], help="a delta bundle, oldest first (repeatable)")
-    p.add_argument("--manifest", action="append", default=[], help="delta manifests, in --delta order")
-    p.add_argument("--index", help="the line index (default: the published v1/1.1/index.json)")
-    p.add_argument("--full-source-release", help="YYYY-MM-DD the full represents, if the index can't name it")
-    p.add_argument("--sha256", help="expected sha256 of --full (overrides discovery)")
+    p.add_argument("--full", required=True, help=FULL_HELP)
+    p.add_argument("--sha256", help=SHA256_HELP)
 
 
 def _pairing(p: argparse.ArgumentParser) -> None:
@@ -74,7 +72,7 @@ def _parser() -> argparse.ArgumentParser:
 
     b = sub.add_parser(
         "build",
-        help="build the Parquet tables from a full bundle (+ optional deltas), or from a selection of it",
+        help="build the Parquet tables from a bundle, or from a selection of it",
         description="Build the tables of a spec. With --driver, select the driver records and the records they "
         "reach first (a mini-bundle in the work directory), then build from it.",
     )
@@ -105,7 +103,8 @@ def _parser() -> argparse.ArgumentParser:
         help="write a full lossless build (the sections spec) back as its source bundle, byte for byte",
         description="Write the bundle a full build of a lossless spec (the default, sections) was made from: its "
         "uncompressed text byte for byte (ADR 0005), checked against the sha256s the build recorded. Refuses a "
-        "selection, a build with deltas or --tables, a directory without its manifest, and any other spec.",
+        "selection, a build with --tables (or, by 1.x, from deltas), a directory without its manifest, and any "
+        "other spec.",
     )
     r.add_argument("dir", type=Path, help="the built directory")
     r.add_argument("-o", "--out", required=True, type=Path, help="the bundle to write (.json, or .json.gz)")
@@ -128,14 +127,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     v.add_argument(
         "--full",
-        help="the full bundle, for --bundle-recompute (or --roundtrip); for a selection, the mini-bundle (its "
+        help="the bundle, for --bundle-recompute (or --roundtrip); for a selection, the mini-bundle (its "
         "sha256 must equal the recorded selected_sha256)",
     )
-    v.add_argument("--delta", action="append", default=[], help="delta bundles, for --bundle-recompute")
-    v.add_argument("--manifest", action="append", default=[], help="delta manifests, in --delta order")
-    v.add_argument("--index", help="the line index, for --bundle-recompute (as for build)")
-    v.add_argument("--full-source-release", help="YYYY-MM-DD the full represents, for --bundle-recompute")
-    v.add_argument("--sha256", help="expected sha256 of --full, for --bundle-recompute")
+    v.add_argument("--sha256", help=SHA256_HELP)
     v.add_argument(
         "--against",
         type=Path,
@@ -173,8 +168,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     val.add_argument("--workers", type=int, help="worker processes (default: the number of CPUs)")
     val.add_argument("--version-property", help="the root property holding the version (default: schema_version)")
-    val.add_argument("--index", help="the line index, for the bundle's expected sha256")
-    val.add_argument("--sha256", help="expected sha256 of the bundle (overrides discovery)")
+    val.add_argument("--sha256", help=SHA256_HELP)
     val.add_argument("--max-print", type=int, default=20, help="failing records to print (default 20)")
     val.add_argument("--failures", type=Path, help="write every failing record and its errors here, as JSON lines")
     val.add_argument("--json", type=Path, help="write the counts and timings here, as JSON")
@@ -187,7 +181,6 @@ def _parser() -> argparse.ArgumentParser:
 # --- deprecations (ADR 0009 decision 5, ADR 0008 decision 2): what 2.0.0 removes, a line each on stderr -----
 
 REMOVED_IN = "2.0.0"
-RELEASE_OPTIONS = ("release", "index", "delta", "manifest", "full_source_release")
 RETIRED_SPECS = {
     "clinvar-gkm": "the 22-table set",
     "baseline": "id, refs and data per section",
@@ -211,12 +204,6 @@ def _retired_spec(arg: str) -> str | None:
 def _warn_deprecations(args: argparse.Namespace) -> None:
     """The deprecated options and defaults these arguments use. Behaviour is unchanged; nothing on stdout."""
     command = args.command
-    given = [o for o in RELEASE_OPTIONS if getattr(args, o, None)]
-    if given:
-        bundle = "the bundle" if command == "validate" else "one bundle with --full"
-        replacement = f"resolve the release yourself and pass {bundle} and --sha256, or a <file>.sha256 sidecar"
-        for o in given:
-            _deprecated(f"--{o.replace('_', '-')} is removed in {REMOVED_IN}; {replacement}")
     spec = getattr(args, "spec", None)
     retired = _retired_spec(spec) if spec is not None else None
     if retired is not None:

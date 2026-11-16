@@ -136,11 +136,9 @@ def main() -> int:
     p.add_argument("out")
     p.add_argument("--every", type=int, default=100)
     p.add_argument("--per-shape", type=int, default=2)
-    p.add_argument("--index")
     p.add_argument("--workers", type=int, default=os.cpu_count())
     a = p.parse_args()
-    index = sources.load_index(a.index) if a.index else None
-    inp = sources.resolve_input(a.bundle, index=index)
+    inp = sources.resolve_input(a.bundle)
 
     def shape_of(version: str) -> BundleShape:
         parts = root_parts(load_schema_set(schema_source(version)), version_property())

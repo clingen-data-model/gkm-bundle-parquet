@@ -247,8 +247,6 @@ def _kv() -> dict[str, str]:
             table_spec_version=SPEC.spec_version,
             bundle_schema_version="1.1.0",
             source_bundle_sha256="0" * 64,
-            source_deltas=[],
-            source_release="2026-10-18",
         )
     }
 

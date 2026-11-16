@@ -76,8 +76,8 @@ from gkm_bundle_parquet.select import SCHEMA_LINE as _SCHEMA_LINE
 from gkm_bundle_parquet.select import SECTION_OPEN as _SECTION_OPEN
 from gkm_bundle_parquet.select import SelectionError, Tap, iter_pointers
 from gkm_bundle_parquet.select import key_end as _key_end
-from gkm_bundle_parquet.sources import open_stream
 from gkm_bundle_parquet.spec import load_spec
+from gkm_bundle_parquet.transport import open_stream
 
 SCRIPT_VERSION = "1.0"
 GENERATOR = "scripts/extract-fixtures.py"
@@ -285,7 +285,7 @@ def shapes(spec_version: str = TABLE_SPEC_VERSION) -> list[Shape]:
 
 
 def _is_url(s: str) -> bool:
-    return s.startswith("https://")  # as sources.open_stream: local paths and https:// URLs only
+    return s.startswith("https://")  # as transport.open_stream: local paths and https:// URLs only
 
 
 class Source:
@@ -333,7 +333,6 @@ class Source:
                 InputFile(
                     source=where,
                     name=where.rsplit("/", 1)[-1],
-                    release=None,
                     expected_sha256=None,
                     sha256_source=None,
                 )
@@ -688,7 +687,7 @@ def validate(gz: bytes, name: str, release: str, sections: dict[str, list[Captur
     with tempfile.TemporaryDirectory(prefix="extract-fixtures.") as tmp:
         path = Path(tmp) / name
         path.write_bytes(gz)
-        inp = InputFile(str(path), name, release, sha, "explicit", len(gz))
+        inp = InputFile(str(path), name, sha, "explicit", len(gz))
         try:
             staged = stage_bundle(inp, Path(tmp) / "work", reader_rules())
         except Exception as e:  # noqa: BLE001 (any reader failure means invalid output)

@@ -352,8 +352,8 @@ def bundle_recompute(
     log=None,
     samples: int = SAMPLES,
 ) -> list[dict]:
-    """Stream and replay the bundle(s) as a build does (build.SectionPipeline) and, per section, compare the
-    section's (key, record) set with the built tables' (id, data): `recompute`, one section at a time, with no
+    """Stream the bundle as a build does (build.SectionPipeline) and, per section, compare the section's
+    (key, record) set with the built tables' (id, data): `recompute`, one section at a time, with no
     state database."""
     out_dir = Path(out_dir)
     names = [t.name for t in spec.tables]
@@ -852,8 +852,6 @@ def run_verify_command(args) -> int:
         return _usage(f"{out_dir}: not a directory")
     if args.bundle_recompute and not args.full:
         return _usage("--bundle-recompute needs --full")
-    if (args.delta or args.manifest) and not args.bundle_recompute:
-        return _usage("--delta/--manifest are only read with --bundle-recompute")
     roundtrip = getattr(args, "roundtrip", False)
     if args.full and not (args.bundle_recompute or roundtrip):
         return _usage("--full is only read with --bundle-recompute or --roundtrip")
@@ -891,15 +889,9 @@ def run_verify_command(args) -> int:
             # must be the recorded selected_sha256. `gkm-bundle-parquet select` with the recorded options
             # regenerates it byte for byte.
             expected = params["selected_sha256"]
-            if args.delta or args.manifest:
-                return _usage(
-                    "these files are a selection: recompute against the mini-bundle alone (--full <mini-bundle>, "
-                    "no --delta); it holds the replayed state. Regenerate it with `gkm-bundle-parquet select` "
-                    "and the options recorded in gkm_bundle_parquet.selection"
-                )
             if args.sha256 and args.sha256.lower() != expected:
                 return _usage(f"--sha256 {args.sha256} is not the selection's selected_sha256 {expected}")
-            inputs = BuildInputs(full=sources.resolve_input(args.full, sha256=expected), full_source_release=None)
+            inputs = BuildInputs(full=sources.resolve_input(args.full, sha256=expected))
         try:
             report.recompute = bundle_recompute(
                 out_dir,

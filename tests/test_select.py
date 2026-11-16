@@ -120,7 +120,7 @@ FIXTURE_SHA = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
 
 
 def fixture_input(path: Path = FIXTURE, sha: str | None = FIXTURE_SHA) -> InputFile:
-    return InputFile(str(path), path.name, "2026-10-18", sha, "explicit" if sha else None, path.stat().st_size)
+    return InputFile(str(path), path.name, sha, "explicit" if sha else None, path.stat().st_size)
 
 
 def seed_of(section: str) -> str:
@@ -262,7 +262,7 @@ def test_output_passes_stage_bundle(tmp_path):
     result = run(tmp_path, {"vcv": [seed_of("vcv")]}, follow="both", max_depth=2)
     assert hashlib.sha256(result.path.read_bytes()).hexdigest() == result.sha256
     assert result.path.stat().st_size == result.size
-    inp = InputFile(str(result.path), result.path.name, None, result.sha256, "explicit", result.size)
+    inp = InputFile(str(result.path), result.path.name, result.sha256, "explicit", result.size)
     staged = stage_bundle(inp, tmp_path / "work", reader_rules())
     assert {s: x.records for s, x in staged.sections.items()} == result.section_counts
     assert staged.schema_version == result.schema_version == "1.1.0"
@@ -360,49 +360,6 @@ def test_dangling_pointer_into_an_unlisted_section_is_not_reported(tmp_path):
     allowed = [s for s in SECTIONS if s not in ("location", "sequenceReference")]
     result = run(tmp_path, {"vcv": [key]}, src=fixture_input(src, None), sections=allowed)
     assert result.dangling == ()
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Record sources other than a bundle file (a replayed delta state)
-
-
-def _records(path: Path):
-    order, lines = parse_lines(path)
-    return [(s, k, r) for s in order for k, r in lines[s]]
-
-
-def test_iter_record_source_gives_the_same_bundle(tmp_path):
-    key = seed_of("variation")
-    from_file = run(tmp_path, {"variation": [key]}, name="file.json.gz", follow="both", max_depth=3)
-    rows = _records(FIXTURE)
-    calls = []
-
-    def records(n):
-        calls.append(n)
-        return iter(rows)
-
-    src = sel.IterRecordSource("replayed-state", "1.1.0", records)
-    from_iter = run(tmp_path, {"variation": [key]}, name="iter.json.gz", src=src, follow="both", max_depth=3)
-    assert from_iter.path.read_bytes() == from_file.path.read_bytes()
-    assert calls == list(range(1, len(from_iter.passes) + 1))
-    assert from_iter.source_sha256 is None and all(p.bytes_read is None for p in from_iter.passes)
-
-
-def test_iter_record_source_checks(tmp_path):
-    rows = _records(FIXTURE)
-    key = seed_of("vcv")
-    gene = rows.index(next(r for r in rows if r[0] == "gene"))
-    split = rows[:gene] + rows[gene + 1 :] + [rows[gene]]
-    shuffled = sel.IterRecordSource("x", "1.1.0", lambda n: rows[-1:] + rows[:-1])
-    with pytest.raises(BundleFormatError, match="appears twice"):
-        run(tmp_path, {"vcv": [key]}, src=shuffled)
-    with pytest.raises(BundleFormatError, match="appears twice"):
-        run(tmp_path, {"vcv": [key]}, src=sel.IterRecordSource("x", "1.1.0", lambda n: split))
-    with pytest.raises(SchemaVersionError):
-        run(tmp_path, {"vcv": [key]}, src=sel.IterRecordSource("x", "9.9.9", lambda n: rows))
-    changing = sel.IterRecordSource("x", "1.1.0", lambda n: rows if n == 1 else rows[1:])
-    with pytest.raises(sel.SourceChangedError):
-        run(tmp_path, {"vcv": [key]}, src=changing)
 
 
 # ---------------------------------------------------------------------------------------------------------------

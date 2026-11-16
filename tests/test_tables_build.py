@@ -18,12 +18,11 @@ def _inputs(path):
     inp = InputFile(
         source=str(path),
         name=path.name,
-        release="2026-10-18",
         expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
         sha256_source="explicit",
         size=path.stat().st_size,
     )
-    return BuildInputs(full=inp, full_source_release="2026-10-18")
+    return BuildInputs(full=inp)
 
 
 def test_build_fixture_end_to_end_with_recompute(tmp_path):

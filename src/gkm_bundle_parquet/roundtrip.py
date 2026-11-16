@@ -460,7 +460,7 @@ def rebuild(
         raise RoundTripError(f"{out_dir}: a selective build (gkm_bundle_parquet.selection) is not a whole bundle")
     if _shared_kv(kvs, "source_deltas") != "[]":
         raise RoundTripError(
-            f"{out_dir}: built with deltas replayed: the tables hold a state no one bundle text holds"
+            f"{out_dir}: built by 1.x with deltas replayed: the tables hold a state no one bundle text holds"
         )
     no_text = [n for n, kv in kvs.items() if "section_text_sha256" not in kv]
     if no_text:
