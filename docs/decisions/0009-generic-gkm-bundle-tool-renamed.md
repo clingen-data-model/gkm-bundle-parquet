@@ -78,6 +78,10 @@ producer is built in, and none is the default:
 | Cache directory, User-Agent | `clinvar-gkm-parquet` | `gkm-bundle-parquet` |
 | Key-value metadata prefix | `clinvar_gkm_parquet.` | `gkm_bundle_parquet.` |
 
+- **The repository was renamed first, on 2026-11-16,** at the maintainer's request and ahead of the work order below.
+  GitHub redirects the old URL. The rest of the table changes in 2.0.0. Until then the PyPI project, package, command,
+  cache directory, User-Agent and prefix keep the old name. The old PyPI project's trusted publisher must name the
+  renamed repository before the next release.
 - **Sets from 1.x stay readable.** The new prefix changes the bytes of every file a build writes, and that is part of
   the MAJOR. `verify` and `rebuild` still read the old prefix, so sets built by 1.x stay checkable and rebuildable.
 - **A last release under the old name** (a 1.x) says the tool has moved. The old name gets no new features.
@@ -132,7 +136,7 @@ a new decision.
 - **Breaking for every 1.x user.** The command name changes, and so do the options a ClinVar-GKM build used. A build with
   no schema stops.
 - **Outward-facing steps, each done only with the maintainer's go-ahead:**
-  - renaming the GitHub repository;
+  - renaming the GitHub repository (done 2026-11-16);
   - registering the PyPI project;
   - the last release under the old name.
 - **The GKM Toolkit move is unchanged** (ADR 0006): the generic core still moves when asked. A standalone name until then

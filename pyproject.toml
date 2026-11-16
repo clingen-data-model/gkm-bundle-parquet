@@ -30,7 +30,7 @@ reference = [
 ]
 
 [project.urls]
-Repository = "https://github.com/clingen-data-model/clinvar-gkm-parquet"
+Repository = "https://github.com/clingen-data-model/gkm-bundle-parquet"
 
 [project.scripts]
 clinvar-gkm-parquet = "clinvar_gkm_parquet.cli:main"

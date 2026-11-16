@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Project-wide invariants for clinvar-gkm-parquet (to be renamed gkm-bundle-parquet, ADR 0009). Keep this file short (under about 120 lines) and limited to
+Project-wide invariants for gkm-bundle-parquet (renamed from clinvar-gkm-parquet 2026-11-16; the package, CLI and PyPI project keep the old name until 2.0.0, ADR 0009). Keep this file short (under about 120 lines) and limited to
 things that are true across the whole repo. Path-specific conventions live in `.claude/rules/` (loaded only when
 working on matching files); one-off decisions live in `docs/decisions/` (ADRs). Change this file via PR review.
 
