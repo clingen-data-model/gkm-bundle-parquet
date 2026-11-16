@@ -13,10 +13,22 @@ that the verdicts are the same is below.
   validated as `{"schema_version": ..., <section>: {}}`. A verdict is per record.
 - **The version property** is `--version-property`, or else `schema_version`. From 1.1.0, a schema given with
   `--bundle-schema` whose root declares no `schema_version` (CIViC's, `tests/fixtures/civic/`) has none, unless
-  `--version-property` names one: each record is then validated as `{<section>: {<key>: <record>}}` (ADR 0009). Because a
-  record is checked alone, a schema whose root `required`s its collections fails every record on that list: on the two
-  CIViC fixtures, every record fails, each only on the root `required` of the other 18 root properties (2026-11-16,
-  `tests/test_validate.py`).
+  `--version-property` names one: each record is then validated as `{<section>: {<key>: <record>}}` (ADR 0009).
+- **The root's `required` is checked once, on the whole bundle.** It says which root properties the bundle holds, so a
+  one-section mini-bundle can't meet it: CIViC's root `required`s all 19 of its root properties, and until this change
+  every CIViC record failed, each only on the other 18. So each mini-bundle is validated against the root schema
+  without its own `required` (`validate.record_root`), every other keyword kept, in both engines. Then, after the
+  bundle is read, each name that `required` lists and the bundle doesn't hold (as a section, an empty section, a root
+  value or the version property) is one failure, reported under that name with no key and no records:
+  `{"section": "<name>", "key": null, "errors": [{"path": "", "message": "\"<name>\" is a required property"}]}`. That
+  check is the same code for both engines, so they can't disagree on it.
+
+  Nothing else is loosened: each record is still checked against its section's schema in full, and the key pattern, the
+  version `const`, the root's `additionalProperties` and `allOf` and each section's `minProperties` still apply to every
+  mini-bundle (`tests/test_validate.py::test_leaving_out_the_root_required_weakens_nothing_else`). Only the root's own
+  top-level `required` is handled this way. A `required` nested in a root `allOf`, `dependentRequired`, or a root
+  `minProperties` above 1 would still be applied to each mini-bundle; none of the published 1.1.0, narrowed or CIViC
+  roots has one (ClinVar-GKM's has `minProperties: 1`, which every mini-bundle meets).
 - **The bundle is streamed** with the tool's own reader (`bundle.py`), and its sha256 is checked against the line index or a
   `.sha256` sidecar when there is one. Records are parsed and validated in worker processes (`--workers`, default: the CPU
   count).
@@ -24,8 +36,9 @@ that the verdicts are the same is below.
   default bundle's set at the bundle's own `schema_version`. Both engines are built from the same loaded `SchemaSet`
   (`schemas.py`). Nothing is fetched while validating: a `$ref` outside the set stops the run.
 - **Exit codes:** 0 when every record passes; 1 when any fails, each named by section, key and instance paths (stderr, and
-  every one in `--failures` as JSON lines); 2 for anything that isn't a verdict on a record: an unreadable or malformed
-  bundle, an unknown section, a missing or mismatched `schema_version`, a schema set that doesn't load or compile.
+  every one in `--failures` as JSON lines), or when the bundle lacks a root property its root `required`s; 2 for anything
+  that isn't a verdict on a record: an unreadable or malformed bundle, an unknown section, a missing or mismatched
+  `schema_version`, a schema set that doesn't load or compile.
 - `--json` writes the counts and timings per section.
 
 ## The engines
@@ -49,12 +62,17 @@ never applied; the equivalence runs below check it anyway. The python engine use
 ## Equivalence: the evidence
 
 The gate for making `rs` the default: both engines give every record the same verdict, on real data and on generated
-negative cases, with both schema sets:
+negative cases, with each schema set:
 
 - **published:** the published 1.1.0 set, the tool's snapshot in `schemas/1.1.0/`;
 - **narrowed:** ClinVar-GKM's narrowed profiles at commit `a956b5a` (`tests/fixtures/schema-sets/`, see its README), which
   set unused base properties to `false`, limit pointers to their target section, close extensions, add enums, and match
-  each section's keys exactly.
+  each section's keys exactly;
+- **civic:** CIViC's schema set (`tests/fixtures/civic/schema-set/`, root `urn:civic:gkm-bundle:schema:0.1.0-a0`), whose
+  root `required`s all 19 root properties and declares no version.
+
+Last rerun 2026-11-16, after the root's `required` moved to a check on the whole bundle (above), with the same inputs as
+the 2026-11-11 runs.
 
 ### Real data
 
@@ -63,20 +81,27 @@ the failing records (section and key) of the two runs.
 
 | Input | Records | Schema set | rs failing | python failing | Verdicts |
 | --- | ---: | --- | ---: | ---: | --- |
-| 2026-10-31 weekly delta, whole (sha256 `443178d9…`, checked against the index) | 495,547 | narrowed | 0 | 0 | identical |
+| 2026-10-31 weekly delta, whole (sha256 `443178d9…`, checked against its `.sha256` sidecar, which matches the index) | 495,547 | narrowed | 0 | 0 | identical |
 | | | published | 0 | 0 | identical |
 | 2026-10-31 weekly full, sample (below) | 922,634 | narrowed | 0 | 0 | identical |
 | | | published | 0 | 0 | identical |
+| CIViC `civic-assertion-9-bundle.json` | 30 | civic | 0 | 0 | identical |
+| CIViC `civic-assertion-251-bundle.json` | 23 | civic | 0 | 0 | identical |
+
+A CIViC count is its records, plus one for each empty collection and each root value that isn't a collection (each is
+checked once). Before the change, every one of them failed under both engines (30 and 23), each only on the root
+`required`.
 
 The sample is `scripts/sample-bundle.py --every 100 --per-shape 2` of the 2026-10-31 weekly full (91,854,927 records; sha256
-`7105eba1…`, checked against the index): every 100th record of each section plus the first two of each record shape, where
-a shape is the record's set of paths with each object tagged by its `type` and each extension by its `name`. It holds all 20
-sections and 2,355 shapes (`scv` alone has 2,113): 918,558 records by position and 4,076 more by shape.
+`7105eba1…`, checked against its `.sha256` sidecar, which matches the index; streamed from `data.clinvar-gkm.org`): every
+100th record of each section plus the first two of each record shape, where a shape is the record's set of paths with each
+object tagged by its `type` and each extension by its `name`. It holds all 20 sections and 2,355 shapes (`scv` alone has
+2,113): 918,558 records by position and 4,076 more by shape.
 
 ### Negative cases
 
-`tests/test_validate.py`, from `tests/_validate_cases.py`. Every case is a real record of the two excerpts with one
-change, generated from the records and the schema set, not listed by hand:
+`tests/test_validate.py`, from `tests/_validate_cases.py`. Every case is a real record of the two excerpts (or, for the
+civic set, of the two CIViC bundles) with one change, generated from the records and the schema set, not listed by hand:
 
 - **Every property a ClinVar-GKM class narrows to `false`**, at every record node that class validates. Where a class applies
   comes from jsonschema-rs's annotations: the `properties` keyword of a schema object annotates each node it validated.
@@ -93,11 +118,16 @@ change, generated from the records and the schema set, not listed by hand:
 | --- | ---: | ---: | ---: |
 | narrowed | 1,309 | 962 | 0 |
 | published | 1,105 | 652 | 0 |
+| civic (the record changes above, for the first record of each of its 12 non-empty collections; no version) | 954 | 590 | 0 |
+
+The civic set rejects all 12 broken keys and all 12 undeclared top-level properties. Its other rejections: 186 strings
+turned into integers, 165 missing properties, 77 changed strings, 67 undeclared nested properties, 64 emptied objects
+and 7 integers turned into strings or fractions. It has no `false` properties, so there are no banned-property cases.
 
 The narrowed set rejects every kind listed; the published one accepts, as it should, what only the narrowing forbids (no
 `false` properties, no pointer patterns). Where both reject, both report the same instance paths, with one known
 difference: Python `jsonschema` reports the error of a `false` subschema at the parent object, jsonschema-rs at the
-property itself (69 of the narrowed set's cases).
+property itself (69 of the narrowed set's cases). On the civic set they report the same paths in every rejected case.
 
 ### Dialects
 
@@ -116,7 +146,9 @@ property itself (69 of the narrowed set's cases).
 
 Apple M2 Pro (6 performance and 4 efficiency cores), 16 GB, macOS 15.7, Python 3.14.5, 10 workers, nothing else running
 (2026-11-11). Wall time is the whole run: reading and checking the bundle, parsing, compiling and validating. Raw results:
-`scripts/validate-equivalence.py`'s `summary.json` and each run's `--json`.
+`scripts/validate-equivalence.py`'s `summary.json` and each run's `--json`. The 2026-11-16 rerun ran beside other jobs,
+so its timings aren't comparable and aren't listed; leaving the root's `required` out of a mini-bundle's schema doesn't
+change what is compiled or validated per record.
 
 | Input | Schema set | rs wall | python wall | rs records/s | python records/s |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -161,5 +193,7 @@ uv run python scripts/sample-bundle.py clinvar-gkm_2026-1031.json.gz sample.json
     --index index.json
 uv run python scripts/validate-equivalence.py sample.json.gz out/ \
     --schema-set narrowed=tests/fixtures/schema-sets/clinvar-gkm-narrowed-a956b5a --schema-set published=schemas/1.1.0
+uv run python scripts/validate-equivalence.py tests/fixtures/civic/civic-assertion-9-bundle.json out-civic/ \
+    --schema-set civic=tests/fixtures/civic/schema-set
 uv run pytest tests/test_validate.py
 ```

@@ -56,9 +56,9 @@ def records() -> list[tuple[str, str, dict]]:
     ]
 
 
-def first_per_section() -> list[tuple[str, str, dict]]:
+def first_per_section(recs=None) -> list[tuple[str, str, dict]]:
     seen, out = set(), []
-    for section, key, rec in records():
+    for section, key, rec in records() if recs is None else recs:
         if section not in seen:
             seen.add(section)
             out.append((section, key, rec))
@@ -181,11 +181,13 @@ def _is_list_step(record, parts, i) -> bool:
 # --- cases from the records --------------------------------------------------------------------------------------
 
 
-def record_cases(sections: list[str]) -> list[Case]:
-    """For the first record of each section: every kind of change at every place it applies."""
-    by_key = {(s, k): r for s, k, r in records()}
+def record_cases(sections: list[str], recs=None) -> list[Case]:
+    """For the first record of each section: every kind of change at every place it applies. `recs` are
+    (section, key, record) triples, by default the excerpts' `records()`."""
+    recs = records() if recs is None else recs
+    by_key = {(s, k): r for s, k, r in recs}
     out: list[Case] = []
-    for section, key, rec in first_per_section():
+    for section, key, rec in first_per_section(recs):
         out.append(Case("key-breaks-pattern", section, "not a key", "", mini(section, "not a key", rec), True))
         out.append(_case("undeclared-top-level", section, key, (UNDECLARED,), {**rec, UNDECLARED: 1}, True))
         for parts, value in nodes(rec):

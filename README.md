@@ -148,12 +148,13 @@ clinvar-gkm-parquet verify out/ --roundtrip --full clinvar-gkm_2026-1018.json.gz
 
 `validate` checks each record alone, as a one-section bundle with the bundle's `schema_version`, so key patterns are
 checked too, as ClinVar-GKM's validator does. A bundle whose schema (`--bundle-schema`) declares no `schema_version` is
-validated with no version, unless `--version-property` names one; a schema whose root `required`s its collections (CIViC's)
-then fails every record on that list, because each record is checked alone ([docs/validate.md](docs/validate.md)). It exits 1 if any record fails, naming its section, key and instance paths,
+validated with no version, unless `--version-property` names one. The root's own `required` (CIViC's lists every root
+property) is checked once, on the names the whole bundle holds, not on each record ([docs/validate.md](docs/validate.md)). It
+exits 1 if any record fails, naming its section, key and instance paths, or if the bundle lacks a name that `required` lists,
 and 2 on anything that isn't a verdict on a record (an unreadable bundle, an unknown section, a missing version, a schema
 set that doesn't load). Its two engines give the same verdicts on every record of the 2026-10-31 delta and a sample of the
-2026-10-31 full, with the published 1.1.0 schemas and ClinVar-GKM's narrowed ones; [docs/validate.md](docs/validate.md) has
-the evidence, the known differences and the timings.
+2026-10-31 full, with the published 1.1.0 schemas and ClinVar-GKM's narrowed ones, and on the two CIViC bundles;
+[docs/validate.md](docs/validate.md) has the evidence, the known differences and the timings.
 
 `rebuild` writes gzip when the output name ends in `.gz`; the gzip bytes differ from the published file (header
 and compressor), the uncompressed text does not, and its sha256 is checked against the build's manifest

@@ -8,6 +8,12 @@ All notable changes to this tool. Each release states the table-spec versions it
 - **Fixed:** closing an HTTP stream whose first request failed (an HTTP error, or giving up after the retries) no
   longer raises `'_HttpStream' object has no attribute '_resp'`; it showed as an ignored exception when the stream was
   garbage-collected (`transport.py`).
+- **Fixed: `validate` no longer fails every record of a bundle whose root schema `required`s its collections** (CIViC's
+  requires all 19 root properties). Each record is still validated alone, as a one-section mini-bundle, but against the
+  root schema without its own `required`, every other keyword kept, in both engines; that `required` is then checked
+  once, on the names the bundle holds, and each missing name is one failure under that name with no key. Both CIViC
+  fixtures now pass (each of their 30 and 23 items failed before), with both engines. ClinVar-GKM's roots have no
+  `required`, so its verdicts don't change; the engine-equivalence evidence was rerun (docs/validate.md).
 
 ## 1.1.0 (2026-11-16)
 
