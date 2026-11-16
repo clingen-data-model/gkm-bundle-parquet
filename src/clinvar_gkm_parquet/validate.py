@@ -3,8 +3,10 @@
 Each record is validated alone, as a one-section mini-bundle `{<version property>: <the bundle's version>,
 <section>: {<key>: <record>}}`, the way ClinVar-GKM's `validate-bundle.py` does, so the section's key pattern is
 checked too. An empty section is validated as `{<version property>: ..., <section>: {}}`, and each root value that
-is not a collection as `{<version property>: ..., <name>: <value>}`. A verdict is per record. The bundle is
-streamed with the tool's reader (bundle.py), and records are parsed and validated in worker processes.
+is not a collection as `{<version property>: ..., <name>: <value>}`. A verdict is per record. The root's own
+`required` names what the whole bundle holds, so it is left out of the schema a mini-bundle is checked against, and
+checked once, on the names the bundle holds (`record_root`, `missing_required`). The bundle is streamed with the
+tool's reader (bundle.py), and records are parsed and validated in worker processes.
 
 Engines:
 
@@ -56,12 +58,24 @@ class Problem:
     message: str
 
 
+def record_root(schema_set: SchemaSet) -> dict:
+    """The root schema a mini-bundle is validated against: the bundle's root without its own `required`, every
+    other keyword kept. That `required` lists what the whole bundle holds, so a mini-bundle of one section can't
+    meet it; `missing_required` checks it once, on the bundle's root names."""
+    return {k: v for k, v in schema_set.bundle.items() if k != "required"}
+
+
+def missing_required(schema_set: SchemaSet, names) -> list[str]:
+    """The names the root's `required` lists that the bundle doesn't hold, in the schema's order."""
+    return [n for n in schema_set.bundle.get("required", []) if n not in names]
+
+
 def _pointer(parts) -> str:
     return "".join("/" + str(p).replace("~", "~0").replace("/", "~1") for p in parts)
 
 
 class _RsEngine:
-    """Compiles one validator per set of root names a mini-bundle holds, on first use: the root schema with its
+    """Compiles one validator per set of root names a mini-bundle holds, on first use: `record_root` with its
     `properties` cut down to those names, every other keyword kept. A document holding only those names gets the
     same verdict from it as from the whole root (the names it lacks are never applied), and a set with many
     sections compiles a validator only for the sections a bundle has: compiling the whole published 1.1.0 root
@@ -92,7 +106,7 @@ class _RsEngine:
         names = frozenset(doc)
         v = self._validators.get(names)
         if v is None:
-            root = dict(self._set.bundle)
+            root = record_root(self._set)
             props = root.get("properties")
             if isinstance(props, dict):
                 root["properties"] = {k: props[k] for k in props if k in names}
@@ -133,7 +147,7 @@ class _PythonEngine:
             m = _ROOT_RELATIVE.match(sid)
             if m:
                 resources.append((m.group(1), resource))
-        self.schema = schema_set.bundle
+        self.schema = record_root(schema_set)
         self.validator = Draft202012Validator(self.schema, registry=Registry().with_resources(resources))
         self._validate = validate_bundle_schema
         self._invalid, self._broken = BundleValidationError, BundleSerializationError
@@ -371,6 +385,14 @@ def validate_bundle(
     run.result.bundle_sha256 = streamed.sha256
     if run.result.records == 0:
         raise ToolError(f"{inp.name}: no records")
+    schema_set, _ = schema_for(run.result.version)
+    names = set(run.result.sections) | ({version_property} if version_property else set())
+    for name in missing_required(schema_set, names):
+        # A verdict on the bundle, not a record: reported under the missing name, with no key and no records.
+        f = {"section": name, "key": None, "errors": [{"path": "", "message": f'"{name}" is a required property'}]}
+        run.result.sections.setdefault(name, SectionResult()).failing += 1
+        on_failure(f)
+        run.result.failures.append(f)
     return run.result
 
 

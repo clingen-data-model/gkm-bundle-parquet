@@ -11,6 +11,7 @@ from __future__ import annotations
 import gzip
 import json
 import re
+from dataclasses import replace
 from functools import cache
 from pathlib import Path
 
@@ -181,28 +182,101 @@ CIVIC = FIXTURES / "civic"
 CIVIC_SCHEMA = CIVIC / "schema-set"
 
 
-@pytest.mark.parametrize("bundle", sorted(CIVIC.glob("civic-assertion-*-bundle.json")), ids=lambda p: p.stem)
-def test_cli_validates_a_bundle_whose_schema_declares_no_version(tmp_path, capsys, bundle):
+CIVIC_BUNDLES = sorted(CIVIC.glob("civic-assertion-*-bundle.json"))
+CIVIC_ROOT = json.loads((CIVIC_SCHEMA / "civic-gkm-bundle-v0.1.0-a0.schema.json").read_text())
+
+
+def civic_records() -> list[tuple[str, str, dict]]:
+    """(section, key, record) for every collection record of the two CIViC bundles."""
+    values = {"metadata", "failedAssertionIds"}
+    return [
+        (section, key, rec)
+        for path in CIVIC_BUNDLES
+        for section, items in json.loads(path.read_text()).items()
+        if section not in values
+        for key, rec in items.items()
+    ]
+
+
+@pytest.mark.parametrize("engine_name", ["rs", pytest.param("python", marks=needs_reference)])
+@pytest.mark.parametrize("bundle", CIVIC_BUNDLES, ids=lambda p: p.stem)
+def test_cli_validates_a_bundle_whose_schema_declares_no_version(tmp_path, capsys, bundle, engine_name):
     """CIViC's schema has no version property, so with no --version-property the bundle is validated with none (it
-    used to stop: no schema_version). Each record is checked alone, and CIViC's root `required` lists every
-    collection, so every record fails on exactly that, and on nothing else."""
+    used to stop: no schema_version). Its root `required` lists all 19 root properties: each record is checked
+    without it, and the bundle, which holds them all, is checked against it once. Every record passes."""
+    assert len(CIVIC_ROOT["required"]) == 19
     doc = json.loads(bundle.read_text())
     out, failures = tmp_path / "counts.json", tmp_path / "f.jsonl"
-    argv = ["validate", str(bundle), "--bundle-schema", str(CIVIC_SCHEMA), "--workers", "1"]
-    assert main([*argv, "--json", str(out), "--failures", str(failures)]) == 1
+    argv = [
+        "validate",
+        str(bundle),
+        "--bundle-schema",
+        str(CIVIC_SCHEMA),
+        "--engine",
+        engine_name,
+        "--workers",
+        "1",
+    ]
+    assert main([*argv, "--json", str(out), "--failures", str(failures)]) == 0
     assert "version: (none)" in capsys.readouterr().out
     result = json.loads(out.read_text())
-    assert result["version"] == ""
+    assert result["version"] == "" and result["failing"] == 0 and failures.read_text() == ""
     values = {"metadata", "failedAssertionIds"}  # root values: each checked once, as a section is
     assert {s: v["records"] for s, v in result["sections"].items()} == {
         k: 1 if k in values else len(v) or 1 for k, v in doc.items()
     }
-    required = set(json.loads((CIVIC_SCHEMA / "civic-gkm-bundle-v0.1.0-a0.schema.json").read_text())["required"])
-    for line in failures.read_text().splitlines():
-        f = json.loads(line)
-        assert {(e["path"], e["message"]) for e in f["errors"]} == {
-            ("", f'"{name}" is a required property') for name in required - {f["section"]}
-        }
+
+
+@pytest.mark.parametrize("engine_name", ["rs", pytest.param("python", marks=needs_reference)])
+def test_cli_reports_each_required_root_property_the_bundle_lacks(tmp_path, capsys, engine_name):
+    """The root's `required` is checked once, on the bundle's root names: each missing one is a failure under its
+    name, with no key and no records. The records still pass."""
+    doc = json.loads(CIVIC_BUNDLES[0].read_text())
+    for name in ("failedAssertionIds", "method"):  # a root value and a collection
+        del doc[name]
+    bundle = tmp_path / "b.json"
+    bundle.write_text(json.dumps(doc, indent=2))
+    out, failures = tmp_path / "counts.json", tmp_path / "f.jsonl"
+    argv = [
+        "validate",
+        str(bundle),
+        "--bundle-schema",
+        str(CIVIC_SCHEMA),
+        "--engine",
+        engine_name,
+        "--workers",
+        "1",
+    ]
+    assert main([*argv, "--json", str(out), "--failures", str(failures)]) == 1
+    assert 'FAIL method: /: "method" is a required property' in capsys.readouterr().err
+    got = [json.loads(line) for line in failures.read_text().splitlines()]
+    assert got == [
+        {"section": name, "key": None, "errors": [{"path": "", "message": f'"{name}" is a required property'}]}
+        for name in ("method", "failedAssertionIds")  # the schema's order
+    ]
+    result = json.loads(out.read_text())
+    values = {"metadata"}
+    assert result["failing"] == 2
+    assert result["records"] == sum(1 if k in values else len(v) or 1 for k, v in doc.items())
+    for name in ("method", "failedAssertionIds"):
+        assert (result["sections"][name]["records"], result["sections"][name]["failing"]) == (0, 1)
+
+
+@pytest.mark.parametrize("engine_name", ["rs", pytest.param("python", marks=needs_reference)])
+def test_leaving_out_the_root_required_weakens_nothing_else(engine_name):
+    """Each record is checked against the root without its `required`, every other root keyword kept: the version
+    const, the root's additionalProperties (an unknown section) and each section's key pattern still reject."""
+    narrowed = engine("narrowed", engine_name)
+    section, key, rec = records()[0]
+    assert narrowed.is_valid({"schema_version": "1.1.0", section: {key: rec}})
+    assert not narrowed.is_valid({"schema_version": "9.9.9", section: {key: rec}})
+    assert not narrowed.is_valid({"schema_version": "1.1.0", "notASection": {key: rec}})
+    assert not narrowed.is_valid({"schema_version": "1.1.0", section: {"not a key": rec}})
+    civic = make_engine(engine_name, read_set(CIVIC_SCHEMA))
+    for section, key, rec in civic_records():
+        assert civic.is_valid({section: {key: rec}}), f"{section}/{key}"
+        assert not civic.is_valid({section: {"not a key": rec}}), f"{section}/{key}"
+        assert not civic.is_valid({section: {key: {**rec, "type": 1}}}), f"{section}/{key}"
 
 
 def test_cli_without_the_schema_or_with_a_version_property_it_lacks_still_stops(tmp_path, capsys):
@@ -242,6 +316,29 @@ def test_rs_and_python_agree_on_every_negative_case(set_name):
             assert not a, case.name
         if not a:
             assert _same_place(rs.problems(doc), py.problems(doc)), case.name
+
+
+@needs_reference
+def test_rs_and_python_agree_on_every_civic_negative_case():
+    """The record cases above, generated from the CIViC records and checked with no version property."""
+    rs, py = make_engine("rs", read_set(CIVIC_SCHEMA)), make_engine("python", read_set(CIVIC_SCHEMA))
+    sections = [s for s in CIVIC_ROOT["properties"] if s not in ("metadata", "failedAssertionIds")]
+    civic_cases = [
+        replace(c, doc={k: v for k, v in c.doc.items() if k != "schema_version"})
+        for c in record_cases(sections, civic_records())
+    ]
+    assert len(civic_cases) > 900
+    rejected = 0
+    for case in civic_cases:
+        doc = case.doc
+        a, b = rs.is_valid(doc), py.is_valid(doc)
+        assert a is b, f"civic: {case.name}: rs {a}, python {b}: {rs.problems(doc)} / {py.problems(doc)}"
+        if case.kind == "key-breaks-pattern":
+            assert not a, case.name
+        if not a:
+            rejected += 1
+            assert _same_place(rs.problems(doc), py.problems(doc)), case.name
+    assert rejected > 0
 
 
 def test_every_banned_property_is_rejected_where_it_applies():
