@@ -1,9 +1,8 @@
 """A compiled spec, as the tool's stages use it: compiled from a pairing, checked, written into a built directory,
 and read back from one (ADR 0006).
 
-A pairing is a bundle schema and its column set, each a path or URL. With neither given, the default bundle's
-pairing for the bundle's version is used (default_pairing.py). This is the version gate of that default: a version
-is accepted when its schema set and column set load and compile, and refused with the reason otherwise.
+A pairing is a bundle schema and its column set, each a path or URL. A bundle is read when its pairing loads and
+compiles; there is no default pairing (ADR 0009).
 
 A build writes the spec it compiled as COMPILED_SPEC_FILE beside its manifest, so `verify` and `rebuild` need no
 schema: they load that file and hold its hash against the one every file records.
@@ -17,11 +16,10 @@ from pathlib import Path
 
 import yaml
 
-from . import default_pairing
 from .bundle import BundleShape, RootRules
 from .columnset import load_column_set
 from .compiler import compile_sections, spec_for_sorted_input, table_spec_sha256
-from .errors import CompileError, SchemaSetError, SchemaVersionError, SpecError
+from .errors import SpecError
 from .schemas import load_schema_set
 from .spec import Spec, SpecSource, check_compiled, parse_spec
 
@@ -54,25 +52,15 @@ def compile_pairing(schema_source: str, column_set_source: str) -> tuple[Spec, S
     return _from_raw(raw, schema_set.sha256, column_set.sha256)
 
 
-def compiled_spec(version: str) -> tuple[Spec, SpecSource]:
-    """The spec of the default bundle at `version`; refused with the reason if it doesn't load and compile."""
-    try:
-        return compile_pairing(default_pairing.schema_source(version), default_pairing.column_set_source(version))
-    except (SchemaSetError, CompileError, SpecError) as e:
-        raise SchemaVersionError(
-            f"bundle schema_version {version!r}: table spec sections can't read it: {e}"
-        ) from e
-
-
 def for_sorted_input(spec: Spec, source: SpecSource) -> tuple[Spec, SpecSource]:
     """The spec for a bundle the general reader normalizes (compiler.spec_for_sorted_input)."""
     return _from_raw(spec_for_sorted_input(source.raw), source.schema_set_sha256, source.column_set_sha256)
 
 
 def reader_rules(spec: Spec) -> RootRules:
-    """How to read a bundle's root for `spec`: a compiled spec says; any other reads the default bundle's."""
+    """How to read a bundle's root for `spec`, as its `root` says (a compiled spec always has one)."""
     if spec.root is None:
-        return default_pairing.reader_rules()
+        raise SpecError(f"table spec {spec.label} has no root: it doesn't say how a bundle's root is read")
     shape = BundleShape(tuple(s for t in spec.tables for s in t.sections), spec.root.other_values)
     return RootRules(spec.root.version_property, lambda version: shape)
 

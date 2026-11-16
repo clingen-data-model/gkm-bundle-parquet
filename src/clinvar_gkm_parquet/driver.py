@@ -6,22 +6,21 @@ picks the record source and runs the engine:
 
 - **The driver** is a table of the chosen spec; its one bundle section holds the starting records.
 - **`--where`** is a DuckDB boolean expression over the driver table AS THE CHOSEN SPEC BUILDS IT. The driver's
-  section is staged from the inputs (the deltas replayed) by the build's own SectionPipeline, the driver table's
+  section is staged from the bundle by the build's own SectionPipeline, the driver table's
   SELECT is rendered with the spec's renderer (build.render_table), and the keys are
   `SELECT DISTINCT <key column> FROM (<rendered>) WHERE (<expr>)`. An expression holding `;` is refused, and it
   is always wrapped in parentheses, so it can't end the query or change its precedence. With neither `--where`
   nor explicit keys, every key of the driver table is selected (for a row-filter table, only its rows).
 - **Explicit keys** (`--ids`, `--ids-file`) are added to the `--where` keys (their union). They need no staging
   pass; the engine fails on any the driver section doesn't hold.
-- **The source.** A full alone is read by select.BundleFileSource; a full plus deltas by replay.ReplayedSource,
-  the same change map the build applies, so the selection sees exactly the state the build would stage. Given a
-  pairing (`--bundle-schema`, `--column-set`), the source's root is read by the pairing's rules: its version
-  property, if any, and its sections (ADR 0008 decision 4.1, ADR 0009); without one, by the default bundle's.
+- **The source.** The bundle is read by select.BundleFileSource, its root by the spec's rules
+  (compiled.reader_rules): the pairing's version property, if any, and its sections (ADR 0008 decision 4.1,
+  ADR 0009).
 - **Provenance.** `driver`, `where` and `ids_sha256` (select.ids_sha256 of the explicit keys, or null) join the
   engine's parameters in `SelectionResult.metadata_json()`, the `clinvar_gkm_parquet.selection` entry.
 
 A build with no driver never calls into this module beyond checking that no selection option was given: the full
-build, and so the BigQuery-parity build, is untouched.
+build is untouched.
 """
 
 from __future__ import annotations
@@ -30,18 +29,17 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 
-from . import build, compiled, replay, select, sqltemplate
+from . import build, compiled, select, sqltemplate
 from .build import SectionPipeline, key_column, sql_ident
-from .bundle import RootRules
 from .errors import InputError
 from .model import BuildInputs, InputFile, StreamedBundle
 from .select import SelectionError, SelectionResult
-from .spec import Spec, Table, is_compiled, resolve_spec
+from .spec import Spec, Table
 
 SELECTION_BUNDLE_NAME = "clinvar-gkm_selection.json.gz"  # the mini-bundle a build writes in its work directory
 
@@ -56,17 +54,15 @@ class Driver:
     follow: str = "out"
     max_depth: int | None = None
     sections: tuple[str, ...] | None = None
-    rules: RootRules | None = None  # how to read the source's root: a pairing's (None: the default bundle's)
 
 
 @dataclass(frozen=True)
 class Selected:
-    """A finished selection: the mini-bundle and the published inputs it was cut from."""
+    """A finished selection: the mini-bundle and the bundle it was cut from."""
 
     result: SelectionResult
     bundle: InputFile  # the mini-bundle, its expected sha256 the one the engine wrote
-    full: StreamedBundle  # the published full, as the selection read it
-    chain: replay.Chain  # the published deltas, read and folded
+    full: StreamedBundle  # the bundle given, as the selection read it
 
 
 # --- checks (before anything is read) -------------------------------------------------------------------------
@@ -154,13 +150,6 @@ def driver_from_args(args) -> Driver | None:
     )
 
 
-def with_pairing_rules(drv: Driver | None, spec: Spec, pairing: tuple[str | None, str | None]) -> Driver | None:
-    """The driver, reading the source's root by the spec's rules when a pairing compiled it."""
-    if drv is None or pairing[0] is None:
-        return drv
-    return replace(drv, rules=compiled.reader_rules(spec))
-
-
 # --- the driver keys and the selection -------------------------------------------------------------------------
 
 
@@ -170,14 +159,13 @@ def driver_keys(
     table: Table,
     where: str | None,
     work: Path,
-    chain: replay.Chain,
     *,
     memory_limit: str | None = None,
     threads: int | None = None,
     log: Callable[[str], None] | None = None,
 ) -> tuple[list[str], StreamedBundle]:
     """The keys of the driver table's rows that `where` holds for (every row with `where` None), evaluated on the
-    table as the spec builds it from the inputs' final state. Returns (sorted keys, the full as streamed)."""
+    table as the spec builds it from the bundle. Returns (sorted keys, the bundle as streamed)."""
     section = table.sections[0]
     body = build.render_table(table).strip().rstrip(";")
     query = f"SELECT DISTINCT {sql_ident(key_column(table))} FROM (\n{body}\n) AS _driver"
@@ -206,7 +194,6 @@ def driver_keys(
         memory_limit=memory_limit,
         threads=threads,
         log=log,
-        chain=chain,
     )
     state = pipe.run()
     return sorted(keys), state.full
@@ -223,17 +210,16 @@ def run_selection(
     threads: int | None = None,
     log: Callable[[str], None] | None = None,
 ) -> Selected:
-    """Find the driver keys, run the engine on the (replayed) inputs and write the mini-bundle at `out_path`."""
+    """Find the driver keys, run the engine on the bundle and write the mini-bundle at `out_path`."""
     table = driver_table(spec, drv)
     section = table.sections[0]
     work = Path(work)
     work.mkdir(parents=True, exist_ok=True)
-    chain = replay.load_chain(inputs, log)
     keys = set(drv.ids)
     streamed = None
     if drv.where is not None or not drv.ids:
         found, streamed = driver_keys(
-            inputs, spec, table, drv.where, work, chain, memory_limit=memory_limit, threads=threads, log=log
+            inputs, spec, table, drv.where, work, memory_limit=memory_limit, threads=threads, log=log
         )
         keys.update(found)
         if log:
@@ -247,11 +233,7 @@ def run_selection(
             f"no driver keys: {cond} matches no row of driver table {table.name} (section {section}, spec "
             f"{spec.label}), and no --ids were given; nothing to select"
         )
-    if chain.deltas:
-        source = replay.ReplayedSource(inputs.full, chain)
-        files = source.files
-    else:
-        source = files = select.BundleFileSource(inputs.full, rules=drv.rules)
+    source = select.BundleFileSource(inputs.full, rules=compiled.reader_rules(spec))
     provenance = {
         "driver": table.name,
         "where": drv.where,
@@ -269,10 +251,10 @@ def run_selection(
         provenance=provenance,
         work_dir=work,
     )
-    if streamed is not None and streamed.sha256 != files.sha256:
+    if streamed is not None and streamed.sha256 != source.sha256:
         raise InputError(
-            f"{inputs.full.name}: sha256 {files.sha256} differs from {streamed.sha256}, read for the driver keys; "
-            "the file changed between the passes"
+            f"{inputs.full.name}: sha256 {source.sha256} differs from {streamed.sha256}, read for the driver "
+            "keys; the file changed between the passes"
         )
     if log:
         log(
@@ -282,20 +264,19 @@ def run_selection(
         )
     full = StreamedBundle(
         input=inputs.full,
-        sha256=files.sha256,
-        size=files.size,
+        sha256=source.sha256,
+        size=source.size,
         schema_version=result.schema_version,
-        counts=dict(result.source_records) if not chain.deltas else {},
+        counts=dict(result.source_records),
     )
     bundle = InputFile(
         source=str(out_path),
         name=Path(out_path).name,
-        release=None,
         expected_sha256=result.sha256,
         sha256_source="selection",
         size=result.size,
     )
-    return Selected(result=result, bundle=bundle, full=full, chain=chain)
+    return Selected(result=result, bundle=bundle, full=full)
 
 
 # --- the select command ----------------------------------------------------------------------------------------
@@ -304,19 +285,12 @@ def run_selection(
 def run_select_command(args) -> int:
     """`clinvar-gkm-parquet select`: write only the mini-bundle, and print the selection entry a build from it
     would carry. The same inputs and options give the same bytes."""
-    spec_arg = getattr(args, "spec", None)
-    if not is_compiled(spec_arg):
-        resolve_spec(spec_arg)  # a bad --spec is reported before any input is touched
+    spec, _ = build.resolve_pairing(args)  # a bad pairing is reported before the bundle is touched
     drv = driver_from_args(args)
     out = Path(args.out)
     if out.exists():
         raise InputError(f"{out} already exists; select writes a new file")
-    pairing = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
-    if pairing[0] is not None and getattr(args, "delta", None):
-        raise InputError("--bundle-schema and --column-set read one bundle: not with --delta")
     inputs = build.resolve_build_inputs(args)
-    spec, _ = build.resolve_spec_for(spec_arg, inputs, *pairing)
-    drv = with_pairing_rules(drv, spec, pairing)
     driver_table(spec, drv)
     root = Path(args.work_dir) if args.work_dir else out.parent
     root.mkdir(parents=True, exist_ok=True)

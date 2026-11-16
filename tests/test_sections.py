@@ -1,10 +1,9 @@
-"""The sections spec (the default, ADR 0003) and the engine features it brings: extension slots by JSON type
-(`json-type`), the integer-or-Range kinds (range-exact, range-min, range-max) and the record-id check of
-known_fields tables.
+"""The sections spec (ADR 0003, ADR 0006), compiled from the ClinVar-GKM 1.1.0 pairing, and the engine features it
+brings: extension slots by JSON type (`json-type`), the integer-or-Range kinds (range-exact, range-min, range-max)
+and the record-id check of known_fields tables.
 
 Expectations come from the fixture records parsed here with stdlib json, checked by the spec's rules as written in
-spec.py (not by the code under test), and the range columns from the clinvar-gkm spec's location columns built
-from the same records. Failures take one real record of the fixture and change it
+spec.py (not by the code under test). Failures take one real record of the fixture and change it
 minimally, as each test says; nothing here is a hand-written record.
 """
 
@@ -18,16 +17,15 @@ import re
 
 import duckdb
 import pytest
-from _tables_helpers import SPEC as CLINVAR_GKM
+from _fixture import SECTIONS, SPEC, SPEC_SOURCE
 from _tables_helpers import connect, read_fixture, rows
 
-from clinvar_gkm_parquet import baseline, build, compat, sqltemplate
-from clinvar_gkm_parquet.default_pairing import sections_of
+from clinvar_gkm_parquet import build, sqltemplate
 from clinvar_gkm_parquet.errors import SpecError
-from clinvar_gkm_parquet.spec import RANGE_KINDS, parse_spec, resolve_spec
+from clinvar_gkm_parquet.spec import RANGE_KINDS, check_compiled, parse_spec
 from clinvar_gkm_parquet.sqltemplate import canonical_type, render_generic
 
-SPEC, SOURCE = resolve_spec("sections", "1.1.0")
+SOURCE = SPEC_SOURCE
 BASE = read_fixture()
 POINTER = re.compile(r"^#/[^/]+/.")
 
@@ -47,24 +45,19 @@ def _table(con, table, fast=True) -> list[dict]:
 # --- the spec --------------------------------------------------------------------------------------------------
 
 
-def test_sections_is_the_default():
-    assert compat.DEFAULT_SPEC == "sections" and (SOURCE.name, SOURCE.version, SOURCE.builtin) == (
-        "sections",
-        "1.0",
-        True,
-    )
-    assert resolve_spec(None, "1.1.0")[0] == SPEC
+def test_the_spec_is_compiled():
+    assert (SOURCE.name, SOURCE.version, SOURCE.builtin, SOURCE.path) == ("sections", "1.0", True, None)
+    assert SOURCE.schema_set_sha256 and SOURCE.column_set_sha256 and SPEC.root is not None
 
 
 def test_spec_shape():
     """One table per section, named as it; `id` (the key) first; no record column; known_fields; every other column
-    reads one top-level property; the generic renderer builds every table, though clinvar-gkm ships a SQL file of
-    the same name for most of them."""
-    assert [t.name for t in SPEC.tables] == list(sections_of("1.1.0"))
+    reads one top-level property; the generic renderer builds every table."""
+    assert [t.name for t in SPEC.tables] == list(SECTIONS)
     for t in SPEC.tables:
         assert t.sections == (t.name,) and t.row_filter is None and t.sort_key == "id" and t.known_fields
         assert (t.columns[0].name, t.columns[0].type, t.columns[0].derivation.kind) == ("id", "VARCHAR", "key")
-        assert not t.columns_of("record") and not t.columns_of("refs")
+        assert not t.columns_of("record")
         last = t.columns[-1]  # the ordinal (ADR 0005), after the property columns
         assert (last.name, last.type, last.nulls, last.derivation.kind) == (
             "ordinal",
@@ -84,10 +77,7 @@ def test_spec_shape():
                 assert c.name == base + suffix, (t.name, c.name)
             else:
                 assert c.name == c.derivation.path[2:], (t.name, c.name)  # named exactly as the property
-        assert baseline.renderer_for(t) is sqltemplate.render_generic
         assert not sqltemplate.generic_problems(t)
-    for t in CLINVAR_GKM.tables:  # the clinvar-gkm tables keep their SQL files
-        assert baseline.renderer_for(t) is sqltemplate.render
 
 
 @pytest.mark.parametrize("name", [t.name for t in SPEC.tables])
@@ -116,12 +106,10 @@ def test_build_tables_self_checks_pass(tmp_path):
         table_spec_version="1.0",
         bundle_schema_version="1.1.0",
         source_bundle_sha256="0" * 64,
-        source_deltas=[],
-        source_release=None,
         table_spec={"table_spec": "sections", "table_spec_version": "1.0"},
     )
     results = build.build_tables(con, SPEC, [t.name for t in SPEC.tables], tmp_path, kv)
-    assert {r.table: r.rows for r in results} == {s: len(BASE[s]) for s in sections_of("1.1.0")}
+    assert {r.table: r.rows for r in results} == {s: len(BASE[s]) for s in SECTIONS}
     for t in SPEC.tables:
         cols = [c for c, _ in build.describe_file(con, tmp_path / t.file_name)]
         assert cols[0] == "id" and "data" not in cols
@@ -269,14 +257,27 @@ def test_json_type_slots_on_known_records():
 RANGE_COLUMNS = ["loc_start", "loc_start_min", "loc_start_max", "loc_end", "loc_end_min", "loc_end_max"]
 
 
-def test_range_columns_equal_clinvar_gkm():
-    """Golden: the clinvar-gkm spec's location columns (sql/location.sql), built from the same records."""
+def _range(value, kind):
+    """spec.py's rule for an integer-or-Range: the integer (NULL for a Range), else the Range's ends."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    return {"range-exact": None, "range-min": value[0], "range-max": value[1]}[kind]
+
+
+def test_range_columns_hold_the_bundle_values():
+    """location.start and .end: each an integer or a Range [min, max] in the bundle; the three columns of each, as
+    spec.py states them, computed here from the records."""
     con = connect(BASE)
     cols = ", ".join(RANGE_COLUMNS)
-    con.execute(f"CREATE TABLE g AS SELECT * FROM ({sqltemplate.render(CLINVAR_GKM.table('location'))})")
     con.execute(f"CREATE TABLE s AS SELECT * FROM ({render_generic(SPEC.table('location'))})")
-    want = con.execute(f"SELECT id, {cols} FROM g ORDER BY id").fetchall()
     got = con.execute(f"SELECT id, {cols} FROM s ORDER BY id").fetchall()
+    kinds = ("range-exact", "range-min", "range-max")
+    want = sorted(
+        (k, *(_range(r.get(p), kind) for p in ("start", "end") for kind in kinds))
+        for k, r in _records("location").items()
+    )
     assert got == want and len(got) == len(BASE["location"]) > 0
     ranges = sum(
         isinstance(r.get("start"), list) or isinstance(r.get("end"), list) for r in _records("location").values()
@@ -285,13 +286,10 @@ def test_range_columns_equal_clinvar_gkm():
     assert ranges == 7  # with open ends on both sides ([null, n] starts, [n, null] ends)
     open_start = "SELECT count(*) FROM s WHERE loc_start_min IS NULL AND loc_start_max IS NOT NULL"
     assert con.execute(open_start).fetchone()[0]
-    # copyNumberCount.copies: the producer writes an integer only (an INT64 column), so the spec has no range
-    # columns for it; the plain BIGINT equals clinvar-gkm's.
-    con.execute(f"CREATE TABLE gc AS SELECT * FROM ({sqltemplate.render(CLINVAR_GKM.table('copyNumberCount'))})")
+    # copyNumberCount.copies: the producer writes an integer only, so the spec has no range columns for it.
     con.execute(f"CREATE TABLE sc AS SELECT * FROM ({render_generic(SPEC.table('copyNumberCount'))})")
     got = con.execute("SELECT id, copies FROM sc ORDER BY id").fetchall()
-    want = con.execute("SELECT id, copies FROM gc ORDER BY id").fetchall()
-    assert got == want and len(got) == len(BASE["copyNumberCount"])
+    assert got == sorted((k, r["copies"]) for k, r in _records("copyNumberCount").items())
 
 
 # --- fail loud -------------------------------------------------------------------------------------------------
@@ -423,22 +421,16 @@ def test_json_type_no_slot_nested_in_a_list_stops_the_build():
 
 
 def test_record_id_not_the_key_stops_the_build():
-    """known_fields tables: the record's own id must be its key (sections, and clinvar-gkm alike)."""
+    """known_fields tables: the record's own id must be its key."""
     sections, key = _mutated("variation", lambda k, r: "id" in r, lambda rec: rec.__setitem__("id", "clinvar:0"))
     needle = f'table variation: record: key {key}: the record\'s id "clinvar:0" is not its bundle key'
     _fails(sections, SPEC.table("variation"), needle)
-    _fails(sections, CLINVAR_GKM.table("variation"), needle, render=sqltemplate.render)
 
 
 def test_record_id_absent():
-    """known_fields alone accepts a record with no id (clinvar-gkm); a sections table states that its records carry
-    their id (json.record_id), so one without it can't be written back, and the round-trip check stops it."""
+    """A sections table states that its records carry their id (json.record_id), so one without it can't be written
+    back, and the round-trip check stops it."""
     sections, key = _mutated("variation", lambda k, r: "id" in r, lambda rec: rec.pop("id"))
-    con = connect(sections)
-    assert key in {
-        r[0]
-        for r in con.execute(f"SELECT id FROM ({sqltemplate.render(CLINVAR_GKM.table('variation'))})").fetchall()
-    }
     _fails(
         sections,
         SPEC.table("variation"),
@@ -473,17 +465,7 @@ def test_range_null_ends_and_absent():
     sections, key = _mutated(
         "location", lambda k, r: "start" in r, lambda rec: rec.__setitem__("start", [None, None])
     )
-    clinvar_gkm = {
-        r["id"]: r for r in _rows_of(connect(sections), sqltemplate.render(CLINVAR_GKM.table("location")))
-    }
-    assert [clinvar_gkm[key][c] for c in RANGE_COLUMNS[:3]] == [None] * 3
     _fails(sections, SPEC.table("location"), f"table location: round trip: key {key}")
-
-
-def _rows_of(con, sql) -> list[dict]:
-    cur = con.execute(f"SELECT * FROM ({sql})")
-    cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
 
 
 # --- fail loud: when the spec loads ----------------------------------------------------------------------------
@@ -543,7 +525,7 @@ def test_at_most_one_record_column():
     raw = _one_table(type="VARCHAR", derivation={"kind": "record", "path": None, "transform": None})
     assert parse_spec(raw).tables[0].columns_of("record")
     raw["tables"][0]["columns"].append({**raw["tables"][0]["columns"][1], "name": "y"})
-    from clinvar_gkm_parquet.spec import check_rules
-
+    raw["name"] = "t"
+    raw["root"] = {"version_property": None, "other_values": False}
     with pytest.raises(SpecError, match="2 record columns"):
-        check_rules(parse_spec(raw))
+        check_compiled(parse_spec(raw), "test")

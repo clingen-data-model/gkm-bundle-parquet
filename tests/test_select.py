@@ -15,11 +15,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import pytest
-from _fixture import FIXTURE, SECTIONS
+from _fixture import FIXTURE, SECTIONS, strict_rules
 
 from clinvar_gkm_parquet import select as sel
 from clinvar_gkm_parquet.bundle import stage_bundle
-from clinvar_gkm_parquet.default_pairing import reader_rules
 from clinvar_gkm_parquet.errors import BundleFormatError, InputError, SchemaVersionError
 from clinvar_gkm_parquet.model import InputFile
 
@@ -120,7 +119,7 @@ FIXTURE_SHA = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
 
 
 def fixture_input(path: Path = FIXTURE, sha: str | None = FIXTURE_SHA) -> InputFile:
-    return InputFile(str(path), path.name, "2026-10-18", sha, "explicit" if sha else None, path.stat().st_size)
+    return InputFile(str(path), path.name, sha, "explicit" if sha else None, path.stat().st_size)
 
 
 def seed_of(section: str) -> str:
@@ -130,7 +129,10 @@ def seed_of(section: str) -> str:
 
 
 def run(tmp_path: Path, seeds: dict, name: str = "selected.json.gz", src=None, **kw) -> sel.SelectionResult:
-    return sel.select(src if src is not None else fixture_input(), seeds, tmp_path / name, **kw)
+    src = src if src is not None else fixture_input()
+    if isinstance(src, InputFile):
+        src = sel.BundleFileSource(src, rules=strict_rules())
+    return sel.select(src, seeds, tmp_path / name, **kw)
 
 
 def output_nodes(path: Path) -> dict[str, list[tuple[bytes, bytes]]]:
@@ -262,8 +264,8 @@ def test_output_passes_stage_bundle(tmp_path):
     result = run(tmp_path, {"vcv": [seed_of("vcv")]}, follow="both", max_depth=2)
     assert hashlib.sha256(result.path.read_bytes()).hexdigest() == result.sha256
     assert result.path.stat().st_size == result.size
-    inp = InputFile(str(result.path), result.path.name, None, result.sha256, "explicit", result.size)
-    staged = stage_bundle(inp, tmp_path / "work", reader_rules())
+    inp = InputFile(str(result.path), result.path.name, result.sha256, "explicit", result.size)
+    staged = stage_bundle(inp, tmp_path / "work", strict_rules())
     assert {s: x.records for s, x in staged.sections.items()} == result.section_counts
     assert staged.schema_version == result.schema_version == "1.1.0"
     assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")]  # no work or partial files left
@@ -293,17 +295,21 @@ def test_unsupported_schema_version_fails(tmp_path):
     )
     path = tmp_path / "v9.json.gz"
     path.write_bytes(gzip.compress(text, mtime=0))
-    with pytest.raises(SchemaVersionError, match="'9.9.9' can't be read.*HTTP 404"):
+    with pytest.raises(SchemaVersionError, match="'9.9.9' is not the fixture's 1.1.0"):
         run(tmp_path, {"vcv": [seed_of("vcv")]}, src=fixture_input(path, None))
 
 
 def test_reopened_source_must_match_pass_1(tmp_path):
     other = tmp_path / "other.json.gz"
     other.write_bytes(gzip.compress(gzip.decompress(FIXTURE.read_bytes()), compresslevel=1, mtime=0))
-    src = sel.BundleFileSource(fixture_input(), reopen=lambda n: open(other, "rb"), checkpoint_bytes=1000)
+    src = sel.BundleFileSource(
+        fixture_input(), reopen=lambda n: open(other, "rb"), checkpoint_bytes=1000, rules=strict_rules()
+    )
     with pytest.raises(sel.SourceChangedError, match="re-opened source differs from the pass-1 stream"):
         run(tmp_path, {"vcv": [seed_of("vcv")]}, src=src)
-    same = sel.BundleFileSource(fixture_input(), reopen=lambda n: open(FIXTURE, "rb"), checkpoint_bytes=1000)
+    same = sel.BundleFileSource(
+        fixture_input(), reopen=lambda n: open(FIXTURE, "rb"), checkpoint_bytes=1000, rules=strict_rules()
+    )
     assert run(tmp_path, {"vcv": [seed_of("vcv")]}, src=same).records > 1
 
 
@@ -360,49 +366,6 @@ def test_dangling_pointer_into_an_unlisted_section_is_not_reported(tmp_path):
     allowed = [s for s in SECTIONS if s not in ("location", "sequenceReference")]
     result = run(tmp_path, {"vcv": [key]}, src=fixture_input(src, None), sections=allowed)
     assert result.dangling == ()
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Record sources other than a bundle file (a replayed delta state)
-
-
-def _records(path: Path):
-    order, lines = parse_lines(path)
-    return [(s, k, r) for s in order for k, r in lines[s]]
-
-
-def test_iter_record_source_gives_the_same_bundle(tmp_path):
-    key = seed_of("variation")
-    from_file = run(tmp_path, {"variation": [key]}, name="file.json.gz", follow="both", max_depth=3)
-    rows = _records(FIXTURE)
-    calls = []
-
-    def records(n):
-        calls.append(n)
-        return iter(rows)
-
-    src = sel.IterRecordSource("replayed-state", "1.1.0", records)
-    from_iter = run(tmp_path, {"variation": [key]}, name="iter.json.gz", src=src, follow="both", max_depth=3)
-    assert from_iter.path.read_bytes() == from_file.path.read_bytes()
-    assert calls == list(range(1, len(from_iter.passes) + 1))
-    assert from_iter.source_sha256 is None and all(p.bytes_read is None for p in from_iter.passes)
-
-
-def test_iter_record_source_checks(tmp_path):
-    rows = _records(FIXTURE)
-    key = seed_of("vcv")
-    gene = rows.index(next(r for r in rows if r[0] == "gene"))
-    split = rows[:gene] + rows[gene + 1 :] + [rows[gene]]
-    shuffled = sel.IterRecordSource("x", "1.1.0", lambda n: rows[-1:] + rows[:-1])
-    with pytest.raises(BundleFormatError, match="appears twice"):
-        run(tmp_path, {"vcv": [key]}, src=shuffled)
-    with pytest.raises(BundleFormatError, match="appears twice"):
-        run(tmp_path, {"vcv": [key]}, src=sel.IterRecordSource("x", "1.1.0", lambda n: split))
-    with pytest.raises(SchemaVersionError):
-        run(tmp_path, {"vcv": [key]}, src=sel.IterRecordSource("x", "9.9.9", lambda n: rows))
-    changing = sel.IterRecordSource("x", "1.1.0", lambda n: rows if n == 1 else rows[1:])
-    with pytest.raises(sel.SourceChangedError):
-        run(tmp_path, {"vcv": [key]}, src=changing)
 
 
 # ---------------------------------------------------------------------------------------------------------------

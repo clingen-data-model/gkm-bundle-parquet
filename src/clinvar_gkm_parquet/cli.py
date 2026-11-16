@@ -9,33 +9,25 @@ from pathlib import Path
 
 from .errors import ToolError
 
-SPEC_HELP = (
-    "table spec: a built-in name (sections, the default: one table per bundle section, a typed column per "
-    "record property, compiled from a bundle schema and its column set; "
-    "baseline: per section id, refs and the record as data; clinvar-gkm, clinvar-gkm-1.0 or "
-    "clinvar-gkm@1.0 for the 22 tables of ClinVar-GKM's published set) or the path of a tables.yaml"
-)
+FULL_HELP = "the bundle: a path or URL (.json or .json.gz)"
+SHA256_HELP = "the bundle's expected sha256 (default: its <file>.sha256 sidecar, when there is one)"
 
 
 def _inputs(p: argparse.ArgumentParser) -> None:
-    src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--full", help="a full bundle: an official monthly or a weekly full (path or URL)")
-    src.add_argument("--release", help="latest | YYYY-MM-DD: resolve the inputs from the line index")
-    p.add_argument("--delta", action="append", default=[], help="a delta bundle, oldest first (repeatable)")
-    p.add_argument("--manifest", action="append", default=[], help="delta manifests, in --delta order")
-    p.add_argument("--index", help="the line index (default: the published v1/1.1/index.json)")
-    p.add_argument("--full-source-release", help="YYYY-MM-DD the full represents, if the index can't name it")
-    p.add_argument("--sha256", help="expected sha256 of --full (overrides discovery)")
+    p.add_argument("--full", required=True, help=FULL_HELP)
+    p.add_argument("--sha256", help=SHA256_HELP)
 
 
-def _pairing(p: argparse.ArgumentParser) -> None:
+def _pairing(p: argparse.ArgumentParser, *, required: str = "required") -> None:
     p.add_argument(
         "--bundle-schema",
-        help="any producer's bundle schema: a file, a URL, or a directory holding a schema set; with --column-set",
+        help=f"the bundle's schema: a file, a URL, or a directory holding a schema set ({required}, with "
+        "--column-set)",
     )
     p.add_argument(
         "--column-set",
-        help="the column set that pairs with --bundle-schema: a file or URL (docs/column-set-format.md)",
+        help=f"the column set that pairs with --bundle-schema: a file or URL (docs/column-set-format.md; "
+        f"{required})",
     )
 
 
@@ -47,7 +39,7 @@ def _selection(p: argparse.ArgumentParser, *, required: bool) -> None:
     g.add_argument(
         "--where",
         help="a DuckDB boolean expression over the driver table as the spec builds it (no ';'), "
-        "e.g. \"name = 'x'\" with the sections spec, \"data->>'$.name' = 'x'\" with baseline",
+        "e.g. \"name = 'x'\"",
     )
     g.add_argument("--ids", help="comma-separated driver keys (added to the --where keys)")
     g.add_argument("--ids-file", help="a file of driver keys, one per line (added to the --where keys)")
@@ -60,25 +52,29 @@ def _selection(p: argparse.ArgumentParser, *, required: bool) -> None:
 
 def _engine(p: argparse.ArgumentParser) -> None:
     p.add_argument("--work-dir", type=Path, help="staging and DuckDB spill directory")
-    p.add_argument("--memory-limit", help="DuckDB memory limit, e.g. 12GB")
+    p.add_argument(
+        "--memory-limit",
+        help="DuckDB memory limit, e.g. 12GB (default: half the machine's memory, or of its cgroup limit if "
+        "lower)",
+    )
     p.add_argument("--threads", type=int, help="DuckDB threads")
 
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="clinvar-gkm-parquet",
-        description="Rebuild ClinVar-GKM's Parquet tables from its published JSON bundles.",
+        description="Build Parquet tables from GKM JSON bundles, rebuild the bundle from them, and validate "
+        "bundles.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
     b = sub.add_parser(
         "build",
-        help="build the Parquet tables from a full bundle (+ optional deltas), or from a selection of it",
+        help="build the Parquet tables from a bundle, or from a selection of it",
         description="Build the tables of a spec. With --driver, select the driver records and the records they "
         "reach first (a mini-bundle in the work directory), then build from it.",
     )
     _inputs(b)
-    b.add_argument("--spec", help=SPEC_HELP)
     _pairing(b)
     b.add_argument("--out", required=True, type=Path, help="output directory")
     b.add_argument("--tables", help="comma-separated subset of tables (default: every table in the spec)")
@@ -93,7 +89,6 @@ def _parser() -> argparse.ArgumentParser:
         "in the bundle's line layout. The same inputs and options give the same bytes.",
     )
     _inputs(s)
-    s.add_argument("--spec", help=SPEC_HELP + "; it defines the driver table --where reads")
     _pairing(s)
     s.add_argument("--out", required=True, type=Path, help="the mini-bundle to write (.json.gz; must not exist)")
     _engine(s)
@@ -102,23 +97,24 @@ def _parser() -> argparse.ArgumentParser:
     r = sub.add_parser(
         "rebuild",
         help="write a full lossless build (the sections spec) back as its source bundle, byte for byte",
-        description="Write the bundle a full build of a lossless spec (the default, sections) was made from: its "
-        "uncompressed text byte for byte (ADR 0005), checked against the sha256s the build recorded. Refuses a "
-        "selection, a build with deltas or --tables, a directory without its manifest, and any other spec.",
+        description="Write the bundle a full build of the sections spec was made from: its uncompressed text "
+        "byte for byte (ADR 0005), checked against the sha256s the build recorded. Reads the spec the build wrote "
+        "beside its manifest; needs no schema. Refuses a selection, a build with --tables (or, by 1.x, from "
+        "deltas) and a directory without its manifest.",
     )
     r.add_argument("dir", type=Path, help="the built directory")
     r.add_argument("-o", "--out", required=True, type=Path, help="the bundle to write (.json, or .json.gz)")
-    r.add_argument("--spec", help="a custom lossless spec's tables.yaml (built-in specs are read from the files)")
     _engine(r)
 
-    v = sub.add_parser("verify", help="check a built directory (spec, bundle recompute, round trip, oracle)")
-    v.add_argument("dir", type=Path)
-    v.add_argument(
-        "--spec",
-        help="the spec the files were written by (default: read from the files); required for a custom spec, "
-        "whose tables.yaml must have the recorded sha256",
+    v = sub.add_parser(
+        "verify",
+        help="check a built directory (the directory check, bundle recompute, round trip)",
+        description="Check a built directory against the spec the build wrote beside its manifest, which every "
+        "file's key-value metadata names by its sha256. Needs no schema; given --bundle-schema and --column-set, "
+        "also checks that they compile to that spec.",
     )
-    v.add_argument("--bundle-recompute", action="store_true", help="id sets and data against the bundle(s)")
+    v.add_argument("dir", type=Path)
+    v.add_argument("--bundle-recompute", action="store_true", help="id sets and data against the bundle")
     v.add_argument(
         "--roundtrip",
         action="store_true",
@@ -127,27 +123,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     v.add_argument(
         "--full",
-        help="the full bundle, for --bundle-recompute (or --roundtrip); for a selection, the mini-bundle (its "
+        help="the bundle, for --bundle-recompute (or --roundtrip); for a selection, the mini-bundle (its "
         "sha256 must equal the recorded selected_sha256)",
     )
-    v.add_argument("--delta", action="append", default=[], help="delta bundles, for --bundle-recompute")
-    v.add_argument("--manifest", action="append", default=[], help="delta manifests, in --delta order")
-    v.add_argument("--index", help="the line index, for --bundle-recompute (as for build)")
-    v.add_argument("--full-source-release", help="YYYY-MM-DD the full represents, for --bundle-recompute")
-    v.add_argument("--sha256", help="expected sha256 of --full, for --bundle-recompute")
-    v.add_argument(
-        "--against",
-        type=Path,
-        help="a reference Parquet directory (the oracle comparison; a full clinvar-gkm build only)",
-    )
+    v.add_argument("--sha256", help=SHA256_HELP)
+    _pairing(v, required="optional")
     v.add_argument("--report", type=Path, help="write a Markdown report here (and a .json beside it)")
     _engine(v)
 
-    c = sub.add_parser(
-        "compile-spec",
-        help="write the sections spec of a pairing, or of the default bundle at a version, as YAML, with no build",
-    )
-    c.add_argument("schema_version", nargs="?", help="a version of the default bundle, e.g. 1.1.0")
+    c = sub.add_parser("compile-spec", help="write the sections spec of a pairing as YAML, with no build")
     _pairing(c)
 
     val = sub.add_parser(
@@ -159,9 +143,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     val.add_argument("bundle", help="the bundle: a path or URL (.json or .json.gz)")
     val.add_argument(
-        "--bundle-schema",
-        help="its schema: a file, a URL, or a directory holding a schema set (default: the default bundle's "
-        "schema at the bundle's own version)",
+        "--bundle-schema", help="its schema: a file, a URL, or a directory holding a schema set (required)"
     )
     val.add_argument(
         "--engine",
@@ -171,9 +153,11 @@ def _parser() -> argparse.ArgumentParser:
         "reference extra)",
     )
     val.add_argument("--workers", type=int, help="worker processes (default: the number of CPUs)")
-    val.add_argument("--version-property", help="the root property holding the version (default: schema_version)")
-    val.add_argument("--index", help="the line index, for the bundle's expected sha256")
-    val.add_argument("--sha256", help="expected sha256 of the bundle (overrides discovery)")
+    val.add_argument(
+        "--version-property",
+        help="the root property holding the bundle's version, put in every record's mini-bundle (default: none)",
+    )
+    val.add_argument("--sha256", help=SHA256_HELP)
     val.add_argument("--max-print", type=int, default=20, help="failing records to print (default 20)")
     val.add_argument("--failures", type=Path, help="write every failing record and its errors here, as JSON lines")
     val.add_argument("--json", type=Path, help="write the counts and timings here, as JSON")
@@ -183,17 +167,12 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-# --- deprecations (ADR 0009 decision 5, ADR 0008 decision 2): what 2.0.0 removes, a line each on stderr -----
+# --- deprecation (ADR 0009 decision 5): the old name, removed with the rename in 2.0.0, a line on stderr -----
 
 NEW_NAME = "gkm-bundle-parquet"
 NEW_REPOSITORY = "https://github.com/clingen-data-model/gkm-bundle-parquet"
 REMOVED_IN = "2.0.0"
 COMMANDS = ("build", "select", "rebuild", "verify", "compile-spec", "validate", "version")
-RELEASE_OPTIONS = ("release", "index", "delta", "manifest", "full_source_release")
-RETIRED_SPECS = {
-    "clinvar-gkm": "the 22-table set",
-    "baseline": "id, refs and data per section",
-}
 
 
 def _deprecated(message: str) -> None:
@@ -211,51 +190,6 @@ def _warn_old_name(argv: list[str]) -> None:
     )
 
 
-def _retired_spec(arg: str) -> str | None:
-    """What a retired `--spec` value names: a retired built-in (with any version form), or a tables.yaml."""
-    from .spec import _BUILTIN_ARG, BUILTIN_SPECS
-
-    m = _BUILTIN_ARG.fullmatch(arg)
-    if m and m["name"] in BUILTIN_SPECS:
-        return RETIRED_SPECS.get(m["name"])
-    return "a tables.yaml"
-
-
-def _warn_deprecations(args: argparse.Namespace) -> None:
-    """The deprecated options and defaults these arguments use. Behaviour is unchanged; nothing on stdout."""
-    command = args.command
-    given = [o for o in RELEASE_OPTIONS if getattr(args, o, None)]
-    if given:
-        bundle = "the bundle" if command == "validate" else "one bundle with --full"
-        replacement = f"resolve the release yourself and pass {bundle} and --sha256, or a <file>.sha256 sidecar"
-        for o in given:
-            _deprecated(f"--{o.replace('_', '-')} is removed in {REMOVED_IN}; {replacement}")
-    spec = getattr(args, "spec", None)
-    retired = _retired_spec(spec) if spec is not None else None
-    if retired is not None:
-        _deprecated(
-            f"--spec {spec} ({retired}) is removed in {REMOVED_IN} (ADR 0008); use the default sections spec with "
-            "--bundle-schema and --column-set, and a column set for other tables"
-        )
-    if command == "verify" and getattr(args, "against", None) is not None:
-        _deprecated(
-            f"verify --against (the oracle comparison) is removed in {REMOVED_IN} (ADR 0008); check a set with "
-            "verify --bundle-recompute and verify --roundtrip"
-        )
-    if command == "compile-spec" and args.schema_version is not None:
-        _deprecated(
-            f"compile-spec <schema_version> (the built-in default bundle) is removed in {REMOVED_IN}; use "
-            "compile-spec --bundle-schema <schema> --column-set <column set>"
-        )
-    default_bundle = (command in ("build", "select") and retired is None) or command == "validate"
-    if default_bundle and getattr(args, "bundle_schema", None) is None:
-        pairing = "--bundle-schema" if command == "validate" else "--bundle-schema and --column-set"
-        _deprecated(
-            f"reading a bundle without --bundle-schema (the built-in default bundle) is removed in {REMOVED_IN}; "
-            f"give the bundle's schema with {pairing}"
-        )
-
-
 def _version(args: argparse.Namespace) -> int:
     from .compat import version_info
 
@@ -263,37 +197,18 @@ def _version(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(info, indent=2))
     else:
-        specs = ", ".join(
-            f"{s['name']} {s['version']} ({s['status']}{', default' if s['default'] else ''}"
-            f"{', deprecated' if s['deprecated'] else ''})"
-            for s in info["table_specs"]
-        )
         print(
-            f"clinvar-gkm-parquet {info['tool_version']}: built-in table specs {specs}; "
-            f"duckdb {info['duckdb_version']}\n{info['schema_version_rule']} Snapshotted: "
-            f"{', '.join(info['snapshotted_schema_versions'])}. "
-            + "; ".join(
-                f"{s['name']} reads {', '.join(s['bundle_schema_versions'])}"
-                for s in info["table_specs"]
-                if not s["compiled"]
-            )
-            + "."
+            f"clinvar-gkm-parquet {info['tool_version']}: table spec {info['table_spec']} "
+            f"{info['table_spec_version']}; duckdb {info['duckdb_version']}\n{info['schema_version_rule']}"
         )
     return 0
 
 
 def _compile_spec(args: argparse.Namespace) -> int:
-    from .compiled import compile_pairing, compiled_spec, compiled_yaml
+    from .build import resolve_pairing
+    from .compiled import compiled_yaml
 
-    pairing = args.bundle_schema, args.column_set
-    if args.schema_version is not None and pairing != (None, None):
-        raise ToolError("compile-spec takes a version, or --bundle-schema and --column-set; not both")
-    if args.schema_version is not None:
-        _, source = compiled_spec(args.schema_version)
-    elif None in pairing:
-        raise ToolError("compile-spec takes a version, or --bundle-schema and --column-set together")
-    else:
-        _, source = compile_pairing(*pairing)
+    _, source = resolve_pairing(args)
     sys.stdout.write(compiled_yaml(source))
     return 0
 
@@ -332,7 +247,6 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     _warn_old_name(argv)
     args = _parser().parse_args(argv)
-    _warn_deprecations(args)
     handler = {
         "build": _build,
         "select": _select,

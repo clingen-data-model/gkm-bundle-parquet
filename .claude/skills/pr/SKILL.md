@@ -9,10 +9,10 @@ description: Open a pull request for gkm-bundle-parquet. Use when the user asks 
 2. If you are on `main`, create a branch first. Name it `<type>/<short-topic>`, where type is one of `feat`,
    `fix`, `docs`, `chore`, `ci`, `spec` (for a table-spec change).
 3. Check the lockstep rules before committing:
-   - a change to CLI behaviour, the table spec, accepted `schema_version`s or the compatibility matrix also
-     updates `README.md`, the changelog and the affected plan or ADR (see `.claude/rules/docs.md`);
-   - a table-spec change follows `.claude/rules/table-spec.md` (new spec directory, bump level, conformance
-     test, oracle or recompute result).
+   - a change to CLI behaviour, the table spec or the compatibility matrix also updates `README.md`, the
+     changelog and the affected plan or ADR (see `.claude/rules/docs.md`);
+   - a rules change follows `.claude/rules/table-spec.md` (bump level, conformance test, recompute and round-trip
+     result).
 4. Run what exists: `uv run ruff check`, `uv run pytest` (once the package exists). Don't claim a check passed
    unless you ran it.
 5. Commit with a short conventional message (`docs: …`, `feat(cli): …`). **No** "Co-Authored-By: Claude" and
@@ -21,5 +21,5 @@ description: Open a pull request for gkm-bundle-parquet. Use when the user asks 
 7. Open the PR against `main`, as a draft unless the user says otherwise:
    `gh pr create --draft --base main --title "<title>" --body-file <file>`.
    The body says what changed, why, how it was verified (commands and results), what was not verified, and
-   which ClinVar-GKM docs page needs a paired change, if any.
+   which producer docs page (ClinVar-GKM's today) needs a paired change, if any.
 8. Don't merge. Report the PR URL to the user.

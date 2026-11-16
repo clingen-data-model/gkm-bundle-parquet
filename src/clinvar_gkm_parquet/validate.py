@@ -1,9 +1,10 @@
 """Validate every record of a bundle against its JSON Schema set, with one of two engines that must agree.
 
 Each record is validated alone, as a one-section mini-bundle `{<version property>: <the bundle's version>,
-<section>: {<key>: <record>}}`, the way ClinVar-GKM's `validate-bundle.py` does, so the section's key pattern is
-checked too. An empty section is validated as `{<version property>: ..., <section>: {}}`, and each root value that
-is not a collection as `{<version property>: ..., <name>: <value>}`. A verdict is per record. The root's own
+<section>: {<key>: <record>}}`, so the section's key pattern is checked too. The version property is
+`--version-property`, or none: then the mini-bundles hold no version, and a version at the root is validated as
+a root value. An empty section is validated as `{<version property>: ..., <section>: {}}`, and each root value
+that is not a collection as `{<version property>: ..., <name>: <value>}`. A verdict is per record. The root's own
 `required` names what the whole bundle holds, so it is left out of the schema a mini-bundle is checked against, and
 checked once, on the names the bundle holds (`record_root`, `missing_required`). The bundle is streamed with the
 tool's reader (bundle.py), and records are parsed and validated in worker processes.
@@ -11,13 +12,12 @@ tool's reader (bundle.py), and records are parsed and validated in worker proces
 Engines:
 
 - `rs` (the default): jsonschema-rs, with a `Registry` of every other file of the set under its `$id`, and the root
-  compiled per set of names a mini-bundle holds (`_RsEngine`). Root-relative `$ref`s (`/clingen/...`) resolve
+  compiled per set of names a mini-bundle holds (`_RsEngine`). Root-relative `$ref`s (`/<path>`) resolve
   against the `$id` of the file they sit in. Its retriever refuses any URI the set doesn't hold, so nothing is
   fetched. Formats aren't validated, as with Python `jsonschema` by default.
 - `python` (the reference, the `reference` extra): the GA4GH GKM Toolkit's `validate_bundle_schema`, with a
   `Draft202012Validator` over a `referencing` registry of the same set, each file under its `$id` and its
-  root-relative form, as ClinVar-GKM's `load_registry` builds it. A record's errors are that validator's
-  `iter_errors`.
+  root-relative form. A record's errors are that validator's `iter_errors`.
 
 Both are built from the same `SchemaSet` (schemas.py), so they see exactly what a build sees. A schema that can't
 be compiled or a `$ref` that can't be resolved stops the run (SchemaSetError); it is never reported as an invalid
@@ -399,38 +399,17 @@ def validate_bundle(
 # --- command ----------------------------------------------------------------------------------------------------
 
 
-def _schema_resolver(bundle_schema: str | None):
-    """schema_for(version): the given set, or the default bundle's set for the bundle's own version."""
+def _schema_resolver(bundle_schema: str):
+    """schema_for(version): the given set, whatever the bundle's version."""
     cache: dict[str, tuple[SchemaSet, str]] = {}
 
     def schema_for(version: str) -> tuple[SchemaSet, str]:
-        if bundle_schema is not None:
-            source = bundle_schema
-        else:
-            from .default_pairing import schema_source
-
-            source = schema_source(version)
-        if source not in cache:
+        if bundle_schema not in cache:
             # A file or URL is fetched and cached here, so each worker reads it from the cache.
-            cache[source] = load_schema_set(source), source
-        return cache[source]
+            cache[bundle_schema] = load_schema_set(bundle_schema), bundle_schema
+        return cache[bundle_schema]
 
     return schema_for
-
-
-def version_property_for(given: str | None, bundle_schema: str | None, schema_for) -> str | None:
-    """The root property holding the version: `--version-property` when given. Without it, the default bundle's
-    (schema_version), except that a given schema whose root doesn't declare that property has none: such a bundle
-    is validated with no version (ADR 0009)."""
-    from .default_pairing import version_property
-
-    if given:
-        return given
-    default = version_property()
-    if bundle_schema is None:
-        return default
-    schema_set, _ = schema_for("")
-    return default if default in schema_set.bundle.get("properties", {}) else None
 
 
 def _format(f: dict) -> str:
@@ -443,10 +422,16 @@ def _format(f: dict) -> str:
 def run_validate_command(args) -> int:
     from . import sources
 
-    index = sources.load_index(args.index) if args.index else None
-    inp = sources.resolve_input(args.bundle, sha256=args.sha256, index=index)
+    if not args.bundle_schema:
+        raise ToolError(
+            "--bundle-schema is required: the bundle's schema (a file, a URL or a schema-set directory); the tool "
+            "has no default bundle (ADR 0009)"
+        )
+    inp = sources.resolve_input(args.bundle, sha256=args.sha256)
     schema_for = _schema_resolver(args.bundle_schema)
-    prop = version_property_for(args.version_property, args.bundle_schema, schema_for)
+    # The root property holding the version: --version-property, or none (ADR 0009 decision 4). With none, a
+    # version at the root is validated as a root value, against its property in the schema.
+    prop = args.version_property or None
     failures_out = open(args.failures, "w", encoding="utf-8") if args.failures else None
     printed = 0
 

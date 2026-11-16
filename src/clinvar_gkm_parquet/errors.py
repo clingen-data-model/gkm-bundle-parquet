@@ -6,7 +6,7 @@ class ToolError(Exception):
 
 
 class InputError(ToolError):
-    """An input can't be read: missing file, HTTP failure, checksum mismatch, malformed index or manifest."""
+    """An input can't be read: missing file, HTTP failure, checksum mismatch."""
 
 
 class BundleFormatError(ToolError):
@@ -17,10 +17,6 @@ class BundleFormatError(ToolError):
 class SchemaVersionError(ToolError):
     """A bundle's schema_version is missing, or the tool can't read it: its schema set doesn't load, its sections
     spec doesn't compile, or the spec asked for doesn't list it (design plan §4.4, ADR 0006 §6)."""
-
-
-class ChainError(ToolError):
-    """A delta chain is broken: a missing week, a wrong order, or a delta that doesn't follow its full."""
 
 
 class SpecError(ToolError):
@@ -41,5 +37,5 @@ class CompileError(ToolError):
 
 class RoundTripError(ToolError):
     """A rebuild can't reproduce the source bundle's text exactly: the directory is not a full lossless build
-    (a selection, deltas, a missing table or ordinal, a spec that is not lossless), a pointer's section is
-    unknown, or the rebuilt text's sha256 differs from the recorded one (ADR 0005)."""
+    (a selection, a set built from deltas by 1.x, a missing table or ordinal, a spec that is not lossless), a
+    pointer's section is unknown, or the rebuilt text's sha256 differs from the recorded one (ADR 0005)."""

@@ -2,11 +2,11 @@
 
 Owned by the build/verify work package.
 
-`build()` streams the full bundle once through a SectionPipeline (with the deltas replayed in the stream,
-replay.py) and builds each section's tables as soon as the section has been read, in a worker thread, while the
-reader goes on to the next section. There is no state database: a section's rows live in DuckDB only while its
-tables are built. `build_tables()` is the table stage on its own (it needs only a DuckDB connection holding the
-`bundle_<section>` tables), so it can be tested without real bundles.
+`build()` streams the bundle once through a SectionPipeline and builds each section's tables as soon as the
+section has been read, in a worker thread, while the reader goes on to the next section. There is no state
+database: a section's rows live in DuckDB only while its tables are built. `build_tables()` is the table stage on
+its own (it needs only a DuckDB connection holding the `bundle_<section>` tables), so it can be tested without real
+bundles.
 
 Determinism (.claude/rules/python.md): each file is written by one `COPY (SELECT * FROM (<sql>) ORDER BY
 <sort_key>)` with the spec's compression and row-group size and key-value metadata that holds no timestamp.
@@ -14,8 +14,8 @@ Measured with DuckDB 1.5.4 (2026-10-20): the bytes are identical across runs, ac
 `preserve_insertion_order` on or off, and when the sort spills to disk under a small `memory_limit`. That holds
 because the sort key is unique (the self-check asserts it): with ties, the order of tied rows could depend on
 threads. The build still sets `preserve_insertion_order = true` (DuckDB's default) so `COPY` keeps the
-`ORDER BY` order. So the order in which a section's rows are staged (the replayed rows come last) and the
-order in which the tables are built don't change the files.
+`ORDER BY` order. So the order in which a section's rows are staged and the order in which the tables are built
+don't change the files.
 """
 
 from __future__ import annotations
@@ -35,24 +35,24 @@ from pathlib import Path
 
 import duckdb
 
-from . import __version__, baseline, bundle, compiled, default_pairing, replay, sources, sqltemplate
-from .compat import BUILTIN_SPECS, COMPILED_SPEC, KV_PREFIX
+from . import __version__, bundle, compiled, sources, sqltemplate
+from .compat import KV_PREFIX
 from .errors import BundleFormatError, InputError, SchemaVersionError, SpecError, ToolError
 from .model import (
     BuildInputs,
     BuildResult,
-    DeltaBundle,
-    DeltaManifest,
     InputFile,
     SectionChunks,
     StreamedBundle,
     TableResult,
 )
 from .roundtrip import promise_of
-from .spec import Spec, SpecSource, Table, is_compiled, load_spec, resolve_spec
+from .spec import Spec, SpecSource, Table
 from .spec import kv_metadata as spec_kv_metadata
+from .transport import open_stream
 
-# Design plan §7.2: the keys every file carries.
+# Design plan §7.2: the keys every file carries. source_deltas and source_release name the deltas and the release
+# of a 1.x build that replayed a release's deltas; from 2.0.0 the tool reads one bundle and writes "[]" and "".
 KV_KEYS = (
     "tool_version",
     "table_spec_version",
@@ -63,8 +63,8 @@ KV_KEYS = (
     "source_release",
     "duckdb_version",
 )
-# Every key, in the order it is written: KV_KEYS, plus the spec's name (build() always writes it; a file without
-# it predates named specs and was written by clinvar-gkm, spec.spec_from_kv), the keys of a custom or compiled spec
+# Every key, in the order it is written: KV_KEYS, plus the spec's name (build() always writes it), the keys of a
+# custom or compiled spec
 # (spec.kv_metadata), in a lossless build only the sha256 of the table's section text (ADR 0005; bundle.py) and,
 # in a selective build only, the selection (ADR 0004; select.SELECTION_METADATA_KEY).
 KV_ORDER = (
@@ -137,6 +137,42 @@ def describe_file(con: duckdb.DuckDBPyConnection, path: Path) -> list[tuple[str,
     return [(r[0], r[1]) for r in rows]
 
 
+# The default DuckDB memory limit when --memory-limit isn't given: this fraction of the machine's memory, or of
+# the process's cgroup limit when that is lower (a container). DuckDB's own default, 80% of physical memory, leaves
+# too little beside it: the limit holds only DuckDB's buffers. On a 32 GB machine, tool 1.0.1's full-release builds
+# peaked at about 29 GB and the 2026-11-06 oracle run ran out of memory (ADR 0008).
+DEFAULT_MEMORY_FRACTION = 0.5
+# cgroup v2, then v1. A missing, unreadable or unlimited ("max") file sets no limit.
+CGROUP_MEMORY_FILES = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+
+
+def available_memory() -> int | None:
+    """Bytes of memory the process may use: physical memory, or the cgroup limit when lower. None if unknown."""
+    sizes = []
+    try:
+        sizes.append(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+    except (AttributeError, ValueError, OSError):
+        pass
+    for path in CGROUP_MEMORY_FILES:
+        try:
+            sizes.append(int(path.read_text(encoding="ascii").strip()))
+        except (OSError, ValueError):
+            continue
+    sizes = [s for s in sizes if s > 0]
+    return min(sizes) if sizes else None
+
+
+def default_memory_limit() -> str | None:
+    """The memory limit a run sets when none is given (DEFAULT_MEMORY_FRACTION); None leaves DuckDB's own."""
+    total = available_memory()
+    if total is None:
+        return None
+    return f"{max(1, int(total * DEFAULT_MEMORY_FRACTION) // 2**20)}MiB"
+
+
 def configure(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -144,8 +180,9 @@ def configure(
     threads: int | None = None,
     temp_directory: Path | None = None,
 ) -> None:
-    """Connection settings for a build or a verify run."""
+    """Connection settings for a build or a verify run. With no memory_limit, default_memory_limit()."""
     con.execute("SET preserve_insertion_order = true")
+    memory_limit = memory_limit or default_memory_limit()
     if memory_limit:
         con.execute(f"SET memory_limit = {sql_str(memory_limit)}")
     if threads:
@@ -185,8 +222,6 @@ def kv_metadata(
     table_spec_version: str,
     bundle_schema_version: str,
     source_bundle_sha256: str,
-    source_deltas: list[dict],
-    source_release: str | None,
     table_spec: dict[str, str] | None = None,
     selection: str | None = None,
 ) -> dict[str, str]:
@@ -198,10 +233,8 @@ def kv_metadata(
         "table_spec_version": table_spec_version,
         "bundle_schema_version": bundle_schema_version,
         "source_bundle_sha256": source_bundle_sha256,
-        "source_deltas": json.dumps(
-            [{"release": d["release"], "sha256": d["sha256"]} for d in source_deltas], separators=(",", ":")
-        ),
-        "source_release": source_release or "",
+        "source_deltas": "[]",
+        "source_release": "",
         "duckdb_version": duckdb.__version__,
     }
     if table_spec:
@@ -216,23 +249,19 @@ def kv_metadata(
 
 
 def spec_kv(spec: Spec, source: SpecSource | None) -> dict[str, str]:
-    """The spec's key-value entries (spec.kv_metadata). A spec given without its source is labelled by its own
-    name and version, and marked custom unless it is the built-in of that name and version. An unnamed spec
-    (an in-memory parse_spec mapping, for tests; every spec file has a name) writes its version only."""
+    """The spec's key-value entries (spec.kv_metadata). A spec given without its source (an in-memory parse_spec
+    mapping, for tests) is labelled by its own name and version and marked custom; an unnamed one writes its
+    version only."""
     if source is not None:
         return spec_kv_metadata(source)
     if spec.name is None:
         return {"table_spec_version": spec.spec_version}
-    if spec.root is None and BUILTIN_SPECS.get(spec.name) == spec.spec_version:
-        if spec.name != COMPILED_SPEC and load_spec(spec.spec_version, spec.name) == spec:
-            return {"table_spec": spec.name, "table_spec_version": spec.spec_version}
     return {"table_spec": spec.name, "table_spec_version": spec.spec_version, "table_spec_builtin": "false"}
 
 
 def render_table(table: Table) -> str:
-    """The table's SELECT: the baseline renderer for key/record/refs tables, else the table's SQL template
-    (baseline.renderer_for)."""
-    return baseline.renderer_for(table)(table)
+    """The table's SELECT: the generic renderer (sqltemplate.render_generic)."""
+    return sqltemplate.render_generic(table)
 
 
 def _kv_sql(kv: dict[str, str], table: str) -> str:
@@ -550,10 +579,9 @@ class _Counter:
 
 @dataclass
 class StreamState:
-    """What a pipeline run read: the full, the deltas, and every section's final record count."""
+    """What a pipeline run read: the bundle, and every section's record count."""
 
     full: StreamedBundle
-    deltas: list[tuple[DeltaBundle, DeltaManifest]]
     counts: dict[str, int]
 
 
@@ -598,16 +626,15 @@ def load_section(
 
 
 class SectionPipeline:
-    """One streaming pass of the full (design plan §6.2), shared by build, `verify --bundle-recompute` and
+    """One streaming pass of the bundle (design plan §6.2), shared by build, `verify --bundle-recompute` and
     load_inputs.
 
-    The reader (the calling thread) checks the chain, reads the deltas into memory and folds them (replay.py),
-    then streams the full once. It stages only the current section, as chunk files holding its final state, and
-    when the section closes puts it on a bounded queue. A worker thread takes each section, makes
+    The reader (the calling thread) streams the bundle once. It stages only the current section, as chunk files,
+    and when the section closes puts it on a bounded queue. A worker thread takes each section, makes
     `bundle_<section>` over its chunks in a DuckDB connection (load_section), calls `process(con, section,
     rows)`, then drops it and deletes the chunks, while the reader goes on to the next section. Every bundle
-    section is handed over once, in bundle order; a section absent from the full (empty, or only in deltas)
-    at its place in that order.
+    section is handed over once, in bundle order; a section absent from the bundle (an empty table) at its place
+    in that order.
 
     Bounds: the chunks of at most QUEUE_SIZE + 2 sections exist at once (the one the worker has, those queued,
     the one being read), and one DuckDB connection runs at a time, so disk and memory follow the largest
@@ -632,13 +659,11 @@ class SectionPipeline:
         log: Callable[[str], None] | None = None,
         queue_size: int | None = None,
         chunk_bytes: int | None = None,
-        chain: replay.Chain | None = None,
         text_digests: bool = False,
     ):
         self.inputs, self.spec, self.work = inputs, spec, Path(work)
-        self.text_digests = text_digests  # hash the full's text, whole and per section (bundle.py)
+        self.text_digests = text_digests  # hash the bundle's text, whole and per section (bundle.py)
         self.section_text_sha256: dict[str, str] = {}  # section -> sha256 of its record lines, with text_digests
-        self.chain = chain  # the deltas already read (replay.load_chain), or None to read them here
         self.schema_version: str | None = None
         self.rules = compiled.reader_rules(spec)
         self.sections: tuple[str, ...] = ()  # the bundle's sections in schema order, from begin()
@@ -648,19 +673,14 @@ class SectionPipeline:
         self.memory_limit, self.threads, self.keep_work = memory_limit, threads, keep_work
         self.log = log or (lambda m: None)
         self.chunk_bytes = chunk_bytes or CHUNK_BYTES
-        self.manifests: list[DeltaManifest] = []
-        self.deltas: list[tuple[DeltaBundle, DeltaManifest]] = []
         self.counts: dict[str, int] = {}
         self.stop = threading.Event()
         self.error: BaseException | None = None
         self._active: duckdb.DuckDBPyConnection | None = None
         self._queue: queue.Queue = queue.Queue(maxsize=queue_size or QUEUE_SIZE)
-        self._changes: dict[str, replay.SectionChanges] = {}
-        self._releases: list[str] = []
         self._order: dict[str, int] = {}
         self._last = -1  # position of the last section opened in the full
         self._writer = None
-        self._replay: replay.SectionReplay | None = None
         self._stage = self.work / "stage"
 
     # --- run ---------------------------------------------------------------------------------------------------
@@ -668,19 +688,12 @@ class SectionPipeline:
     def run(self) -> StreamState:
         self._stage.mkdir(parents=True, exist_ok=True)
         inputs = self.inputs
-        # The chain is checked from the manifests before any bundle is read (replay.load_chain).
-        chain = self.chain if self.chain is not None else replay.load_chain(inputs, self.log)
-        self.manifests, self.deltas, self._changes = chain.manifests, chain.deltas, chain.changes
-        self._releases = chain.releases
-
         worker = threading.Thread(target=self._work, name="clinvar-gkm-parquet-worker")
         worker.start()
         try:
-            self.log(
-                f"streaming {inputs.full.name}" + (f" with {len(self.deltas)} delta(s)" if self.deltas else "")
-            )
+            self.log(f"streaming {inputs.full.name}")
             full = bundle.stream_bundle(inputs.full, self, self.rules, text_digests=self.text_digests)
-            for s in self.sections:  # sections after the full's last one
+            for s in self.sections:  # sections after the bundle's last one
                 if s not in self.counts:
                     self._absent_section(s)
             self._put(None)
@@ -701,7 +714,7 @@ class SectionPipeline:
         worker.join()
         if self.error is not None:
             raise self.error
-        return StreamState(full=full, deltas=self.deltas, counts=dict(self.counts))
+        return StreamState(full=full, counts=dict(self.counts))
 
     def _work(self) -> None:
         try:
@@ -763,7 +776,6 @@ class SectionPipeline:
                 f"bundle schema_version {schema_version} is not one table spec {spec.spec_version} reads "
                 f"({', '.join(spec.bundle_schema_versions)})"
             )
-        replay.check_schema_versions(self.inputs.full.name, schema_version, self.deltas)
         self.schema_version = schema_version
         self.sections = self.rules.shape_of(schema_version).collections
         self._order = {s: i for i, s in enumerate(self.sections)}
@@ -778,7 +790,7 @@ class SectionPipeline:
                 f"assembler writes the sections in the bundle schema's order ({', '.join(self.sections)})"
             )
         self._last = pos
-        for s in self.sections[:pos]:  # sections the full lacks, at their place in the order
+        for s in self.sections[:pos]:  # sections the bundle lacks, at their place in the order
             if s not in self.counts:
                 self._absent_section(s)
         return self._open(section)
@@ -805,19 +817,15 @@ class SectionPipeline:
         else:
             w = _Counter()
         self._writer = w
-        changes = self._changes.get(section)
-        self._replay = replay.SectionReplay(changes, self.inputs.full.name, self._releases) if changes else None
-        return self._replay.wrap(w.add) if self._replay else w.add
+        return w.add
 
     def _close(self, section: str) -> None:
         w = self._writer
-        if self._replay is not None:
-            self._replay.finish(w.add)
         w.close()
-        self._writer = self._replay = None
+        self._writer = None
         self.counts[section] = w.records
-        # A spec may read a subset of the sections (a custom spec); a section the bundle schema doesn't have is
-        # never dropped silently (bundle.py refuses it while reading; this is the guard for the final state).
+        # A spec may read a subset of the sections; a section the bundle schema doesn't have is never dropped
+        # silently (bundle.py refuses it while reading; this is the guard for what was staged).
         if w.records and section not in self.sections:
             raise SpecError(
                 f"section {section} is not a section of bundle schema {self.schema_version}; refusing to drop it"
@@ -826,7 +834,7 @@ class SectionPipeline:
             self._put(SectionChunks(section, tuple(w.paths), w.records, w.max_line))
 
     def _absent_section(self, section: str) -> None:
-        """A section the full lacks: its final state is the deltas' upserts, if any."""
+        """A section the bundle lacks: an empty table."""
         self._open(section)
         self._close(section)
 
@@ -839,11 +847,10 @@ def default_work_dir(out_dir: Path) -> Path:
     return out.parent / f"{out.name}.work"
 
 
-def _input_record(inp: InputFile, streamed: StreamedBundle | DeltaBundle | None = None) -> dict:
+def _input_record(inp: InputFile, streamed: StreamedBundle | None = None) -> dict:
     rec = {
         "source": inp.source,
         "name": inp.name,
-        "release": inp.release,
         "expected_sha256": inp.expected_sha256,
         "sha256_source": inp.sha256_source,
     }
@@ -854,13 +861,6 @@ def _input_record(inp: InputFile, streamed: StreamedBundle | DeltaBundle | None 
     elif inp.size is not None:
         rec["size"] = inp.size
     return rec
-
-
-def source_release_of(inputs: BuildInputs, manifests: list[DeltaManifest]) -> str | None:
-    """§7.2: the last delta's release; with no deltas, the full's source release (or its own release)."""
-    if manifests:
-        return manifests[-1].release
-    return inputs.full_source_release or inputs.full.release
 
 
 def _now() -> str:
@@ -874,7 +874,6 @@ def write_manifest(
     spec: Spec,
     inputs: BuildInputs,
     full: StreamedBundle,
-    deltas: list[tuple[DeltaBundle, DeltaManifest]],
     counts: dict[str, int],
     results: list[TableResult],
     started_at: str,
@@ -884,26 +883,24 @@ def write_manifest(
     """The dataset manifest (design plan §7.3). It carries timestamps, so unlike the Parquet files it is not
     byte-reproducible. `table_spec` names the spec as the files' key-value metadata does (plus the sha256 of its
     tables.yaml when known); `selection`, present only for a selective build, is the files' selection entry as
-    an object. `inputs` and the source keys name the published bundles; `sections` counts the state the tables
-    were built from (for a selective build, the mini-bundle's)."""
-    source_release = kv["source_release"] or None
+    an object. `inputs` and the source keys name the bundle read; `sections` counts the records the tables were
+    built from (for a selective build, the mini-bundle's). `source_release` and `release` are null: the tool reads
+    one bundle and doesn't know which release it is, so a producer that publishes the manifest fills them."""
     spec_name = kv.get("table_spec") or spec.name
     subset = " (a selection; see selection)" if "selection" in kv else ""
     manifest = {
         "label": DERIVED_LABEL,
         "derived": True,
         "note": (
-            f"Parquet tables derived from the {'' if spec.root else 'ClinVar-GKM '}JSON bundle(s) listed under "
-            "inputs by "
+            "Parquet tables derived from the JSON bundle listed under inputs by "
             f"clinvar-gkm-parquet {kv['tool_version']} (table spec {spec_name} {kv['table_spec_version']})"
-            f"{subset}. The bundles are the record; these files may be regenerated."
+            f"{subset}. The bundle is the record; these files may be regenerated."
         ),
         "build_date": ended_at[:10],
-        "source_release": source_release,
-        "release": source_release,
-        # ClinVar-GKM's line index reads builder, dataset and files[] from this manifest (r2_layout.build_index
-        # @ origin/1.0 25344ba; the shape of its own `parquet-manifest` command). dataset names a BigQuery
-        # dataset, which the tool can't know.
+        "source_release": None,
+        "release": None,
+        # A producer's release index may read builder, dataset and files[] from this manifest. dataset names the
+        # producer's own dataset, which the tool can't know.
         "builder": f"clinvar-gkm-parquet {kv['tool_version']}",
         "dataset": None,
         "files": [
@@ -932,19 +929,7 @@ def write_manifest(
         "schema_version": kv["bundle_schema_version"],
         "duckdb_version": kv["duckdb_version"],
         "source_bundle_sha256": kv["source_bundle_sha256"],
-        "source_deltas": json.loads(kv["source_deltas"]),
-        "inputs": {
-            "full": {**_input_record(inputs.full, full), "source_release": inputs.full_source_release},
-            "deltas": [
-                {
-                    "bundle": _input_record(d_inp, delta),
-                    "manifest": _input_record(m_inp),
-                    "release": man.release,
-                    "baseline_release": man.baseline_release,
-                }
-                for (d_inp, m_inp), (delta, man) in zip(inputs.deltas, deltas, strict=True)
-            ],
-        },
+        "inputs": {"full": _input_record(inputs.full, full)},
         "sections": dict(sorted(counts.items())),
         "tables": {
             r.table: {"file": r.file.name, "rows": r.rows, "sha256": r.sha256, "size": r.size}
@@ -979,12 +964,13 @@ def tables_by_section(spec: Spec, names: list[str]) -> dict[str, list[str]]:
 
 
 def _prehash(inp: InputFile, log: Callable[[str], None] | None) -> str:
-    """The sha256 of a full that has no published checksum. The tables' key-value metadata names it and is
-    written before the stream ends, so it is computed first, in a separate pass over the compressed bytes."""
+    """The sha256 of a bundle given with no checksum (no --sha256, no sidecar). The tables' key-value metadata
+    names it and is written before the stream ends, so it is computed first, in a separate pass over the
+    compressed bytes."""
     if log:
-        log(f"hashing {inp.name} first (no published sha256)")
+        log(f"hashing {inp.name} first (no sha256 given)")
     h = hashlib.sha256()
-    with sources.open_stream(inp) as fh:
+    with open_stream(inp) as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
@@ -992,11 +978,10 @@ def _prehash(inp: InputFile, log: Callable[[str], None] | None) -> str:
 
 @dataclass
 class LoadedState:
-    """What `load_inputs` leaves behind: the inputs read and a DuckDB connection holding the final state."""
+    """What `load_inputs` leaves behind: the bundle read and a DuckDB connection holding its sections."""
 
     con: duckdb.DuckDBPyConnection
     full: StreamedBundle
-    deltas: list[tuple[DeltaBundle, DeltaManifest]]
     counts: dict[str, int]
 
 
@@ -1009,8 +994,8 @@ def load_inputs(
     threads: int | None = None,
     log: Callable[[str], None] | None = None,
 ) -> LoadedState:
-    """Every section's final state in ONE in-memory DuckDB connection, as `bundle_<section>` tables (all of the
-    schema's; a section absent from every input is an empty table). For tests and small bundles: build and
+    """Every section in ONE in-memory DuckDB connection, as `bundle_<section>` tables (all of the schema's; a
+    section absent from the bundle is an empty table). For tests and small bundles: build and
     `verify --bundle-recompute` stream one section at a time instead."""
     work = Path(work)
     con = duckdb.connect()
@@ -1023,7 +1008,7 @@ def load_inputs(
         raise
     finally:
         shutil.rmtree(pipe.work / "stage", ignore_errors=True)
-    return LoadedState(con, state.full, state.deltas, state.counts)
+    return LoadedState(con, state.full, state.counts)
 
 
 def build(
@@ -1035,7 +1020,7 @@ def build(
     keep_work: bool = False,
     memory_limit: str | None = None,
     threads: int | None = None,
-    spec: Spec | None = None,
+    spec: Spec,
     spec_source: SpecSource | None = None,
     driver=None,
     render: Callable[[Table], str] | None = None,
@@ -1044,15 +1029,11 @@ def build(
     """Stream the inputs once and build every table section by section (design plan §6.2), then write the
     manifest.
 
-    `spec` defaults to the default spec, sections, as the CLI's does (ADR 0003), compiled for the full's
-    schema_version (ADR 0006); a build meant to match the published set passes the clinvar-gkm spec. `spec_source`
-    (spec.resolve_spec) labels the files, see
-    `spec_kv`. With `driver` (a driver.Driver), the selection runs first, writing a mini-bundle in the work
-    directory, and the tables are built from it (ADR 0004): every file and the manifest then carry the
-    selection, while the source keys and `inputs` still name the published bundles. Without one, the selection
-    code is never reached. `render` defaults to `render_table`."""
-    if spec is None:
-        spec, spec_source = resolve_spec_for(None, inputs)
+    `spec` is the spec to build, compiled from the bundle's schema and column set (compiled.compile_pairing,
+    ADR 0006); `spec_source` labels the files, see `spec_kv`. With `driver` (a driver.Driver), the selection runs
+    first, writing a mini-bundle in the work directory, and the tables are built from it (ADR 0004): every file
+    and the manifest then carry the selection, while the source keys and `inputs` still name the bundle given.
+    Without one, the selection code is never reached. `render` defaults to `render_table`."""
     if (
         spec_source is not None
         and spec_source.raw is not None
@@ -1074,7 +1055,7 @@ def build(
     started_at = _now()
     out_dir = Path(out_dir)
     # One directory holds one set: building into a directory that already has table files or a manifest could
-    # leave tables from two releases side by side (after a failure, or with --tables).
+    # leave tables from two bundles side by side (after a failure, or with --tables).
     if out_dir.is_dir():
         existing = sorted(
             p.name
@@ -1109,25 +1090,22 @@ def build(
                 threads=threads,
                 log=log,
             )
-            read = BuildInputs(full=selected.bundle, full_source_release=None)
+            read = BuildInputs(full=selected.bundle)
             full_sha = selected.full.sha256
             read_sha = selected.result.sha256
         else:
             read = inputs
             full_sha = read_sha = (inputs.full.expected_sha256 or _prehash(inputs.full, log)).lower()
-        # A lossless spec built in full from one bundle, with no deltas: the files record the bundle's text, which
-        # `rebuild` writes back (ADR 0005). A selection or a replayed state is not one bundle's text.
-        lossless = spec.lossless and driver is None and not inputs.deltas
+        # A lossless spec built in full: the files record the bundle's text, which `rebuild` writes back
+        # (ADR 0005). A selection is not the bundle's text.
+        lossless = spec.lossless and driver is None
 
         def on_begin(pipe: SectionPipeline, schema_version: str) -> None:
-            chain = selected.chain if selected else pipe
             kv.update(
                 kv_metadata(
                     table_spec_version=spec.spec_version,
                     bundle_schema_version=schema_version,
                     source_bundle_sha256=full_sha,
-                    source_deltas=[{"release": m.release, "sha256": d.sha256} for d, m in chain.deltas],
-                    source_release=source_release_of(inputs, chain.manifests),
                     table_spec=tspec,
                     selection=selected.result.metadata_json() if selected else None,
                 )
@@ -1176,7 +1154,6 @@ def build(
             spec=spec,
             inputs=inputs,
             full=selected.full if selected else state.full,
-            deltas=selected.chain.deltas if selected else state.deltas,
             counts=state.counts,
             results=ordered,
             started_at=started_at,
@@ -1185,7 +1162,6 @@ def build(
         )
         return BuildResult(
             out_dir=out_dir,
-            source_release=kv["source_release"] or None,
             tables=tuple(ordered),
             manifest_path=manifest_path,
         )
@@ -1211,97 +1187,40 @@ def build(
 # --- CLI -------------------------------------------------------------------------------------------------------
 
 
-def manifest_source_for(delta_source: str) -> str:
-    """The delta manifest next to a delta bundle: clinvar-gkm-delta_YYYY-MMDD.manifest.json (provisional name,
-    design plan §10) beside clinvar-gkm-delta_YYYY-MMDD.json.gz."""
-    for suffix in (".json.gz", ".json"):
-        if delta_source.endswith(suffix):
-            return delta_source[: -len(suffix)] + ".manifest.json"
-    raise InputError(f"can't derive the manifest name from {delta_source!r}; pass --manifest")
-
-
 def resolve_build_inputs(args) -> BuildInputs:
-    """CLI arguments -> BuildInputs (shared by build and verify --bundle-recompute)."""
-    release = getattr(args, "release", None)
-    index_src = getattr(args, "index", None)
-    deltas_src = list(getattr(args, "delta", None) or [])
-    manifests_src = list(getattr(args, "manifest", None) or [])
-    if release:
-        if (
-            deltas_src
-            or manifests_src
-            or getattr(args, "full_source_release", None)
-            or getattr(args, "sha256", None)
-        ):
-            raise InputError(
-                "--release resolves the full and deltas (and their checksums) itself; don't combine it with "
-                "--delta, --manifest, --full-source-release or --sha256"
-            )
-        index = sources.load_index(index_src or sources.DEFAULT_INDEX_URL)
-        # Index paths start with the line (v1/1.1/...) and are relative to the index's base_url.
-        base_url = index.get("base_url") or sources.DEFAULT_BASE_URL
-        return sources.resolve_release(index, release, base_url=base_url)
+    """CLI arguments -> BuildInputs (shared by build, select and verify --bundle-recompute): the one bundle
+    `--full` names, with `--sha256` or else its `<file>.sha256` sidecar."""
     if not getattr(args, "full", None):
-        raise InputError("--full (or --release) is required")
-    if manifests_src and len(manifests_src) != len(deltas_src):
-        raise InputError(f"{len(manifests_src)} --manifest for {len(deltas_src)} --delta; give one per delta")
-    index = sources.load_index(index_src) if index_src else None
-    full = sources.resolve_input(args.full, sha256=getattr(args, "sha256", None), index=index)
-    manifests_src = manifests_src or [manifest_source_for(d) for d in deltas_src]
-    deltas = tuple(
-        (sources.resolve_input(d, index=index), sources.resolve_input(m, index=index))
-        for d, m in zip(deltas_src, manifests_src, strict=True)
-    )
-    return BuildInputs(
-        full=full,
-        full_source_release=getattr(args, "full_source_release", None) or full.release,
-        deltas=deltas,
-    )
+        raise InputError("--full is required: the bundle to read (a path or URL)")
+    return BuildInputs(full=sources.resolve_input(args.full, sha256=getattr(args, "sha256", None)))
 
 
 def _log(msg: str) -> None:
     print(f"clinvar-gkm-parquet: {msg}", file=sys.stderr, flush=True)
 
 
-def resolve_spec_for(
-    arg: str | None, inputs: BuildInputs, bundle_schema: str | None = None, column_set: str | None = None
-) -> tuple[Spec, SpecSource]:
-    """The spec a `--spec` value names, for these inputs. A pairing (`bundle_schema`, `column_set`) compiles for
-    any bundle. With none, the compiled spec is the default bundle's, for the version the full's first lines state
-    (ADR 0006). Any other spec doesn't read the bundle here."""
-    if (bundle_schema is None) != (column_set is None):
-        raise InputError("--bundle-schema and --column-set go together: a schema and the column set it pairs with")
-    if bundle_schema is not None:
-        if not is_compiled(arg):
-            raise InputError(f"--bundle-schema and --column-set compile the sections spec; not with --spec {arg}")
-        return compiled.compile_pairing(str(bundle_schema), str(column_set))
-    if not is_compiled(arg):
-        return resolve_spec(arg)
-    prop = default_pairing.version_property()
-    version = bundle.peek_version(inputs.full, prop)
-    if version is None:
-        raise SchemaVersionError(
-            f"{inputs.full.name}: no {prop!r} at the root, so it isn't the tool's default bundle; give its schema "
-            "and column set with --bundle-schema and --column-set. See the compatibility matrix in the README."
-        )
-    return resolve_spec(arg, version)
+PAIRING_REQUIRED = (
+    "--bundle-schema and --column-set are required: the bundle's schema (a file, a URL or a schema-set "
+    "directory) and the column set that pairs with it; the tool has no default bundle (ADR 0009)"
+)
+
+
+def resolve_pairing(args) -> tuple[Spec, SpecSource]:
+    """The sections spec compiled from `--bundle-schema` and `--column-set`, both required."""
+    bundle_schema, column_set = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
+    if bundle_schema is None or column_set is None:
+        raise InputError(PAIRING_REQUIRED)
+    return compiled.compile_pairing(str(bundle_schema), str(column_set))
 
 
 def run_build_command(args) -> int:
-    """`clinvar-gkm-parquet build`: resolve the spec, the selection options and the inputs from the CLI
-    arguments, build, print a summary. No --spec means the default spec (sections)."""
-    from .driver import driver_from_args, with_pairing_rules
+    """`clinvar-gkm-parquet build`: compile the spec from the pairing, resolve the selection options and the input
+    from the CLI arguments, build, print a summary."""
+    from .driver import driver_from_args
 
-    spec_arg = getattr(args, "spec", None)
-    if not is_compiled(spec_arg):
-        resolve_spec(spec_arg)  # a bad --spec is reported before any input is touched
+    spec, source = resolve_pairing(args)  # a bad pairing is reported before the bundle is touched
     driver = driver_from_args(args)
     inputs = resolve_build_inputs(args)
-    pairing = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
-    if pairing[0] is not None and inputs.deltas:
-        raise InputError("--bundle-schema and --column-set read one bundle: not with --delta")
-    spec, source = resolve_spec_for(spec_arg, inputs, *pairing)
-    driver = with_pairing_rules(driver, spec, pairing)
     tables = [t.strip() for t in args.tables.split(",") if t.strip()] if args.tables else None
     result = build(
         inputs,
@@ -1318,10 +1237,7 @@ def run_build_command(args) -> int:
     )
     total = sum(t.rows for t in result.tables)
     subset = f", a selection driven by {driver.table}" if driver else ""
-    print(
-        f"built {len(result.tables)} table(s) of spec {source.label}, {total} rows, source release "
-        f"{result.source_release or '?'}{subset}"
-    )
+    print(f"built {len(result.tables)} table(s) of spec {source.label}, {total} rows{subset}")
     for t in result.tables:
         print(f"  {t.table:<36} {t.rows:>12}  {t.sha256[:12]}")
     print(f"manifest: {result.manifest_path}")

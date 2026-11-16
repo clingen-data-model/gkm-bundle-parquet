@@ -11,7 +11,7 @@ their gitlinks record. Each file's source is the `url` in `MANIFEST.json`.
 
 - **Root:** `schema/clinvar-gkm/clinvar-gkm-bundle.schema.json`. 143 files, from 159 candidates.
 - **Schema set sha256** (schemas.py, over each `$id` and its bytes): `98612fcac74526e4af76cd81a4cfadb09111c7df941c303ddc8cb79663618c6a`.
-- **What changed from the published 1.1.0 set** (`schemas/1.1.0/`): every section points at a `Clinvar*` profile that sets
+- **What changed from the published 1.1.0 set** (`tests/fixtures/clinvar-gkm/1.1.0/schema-set/`): every section points at a `Clinvar*` profile that sets
   unused base properties to `false`; pointers name their target section (`pattern: "^#/<section>/"`); extensions are closed
   classes; enums are set where the pipeline fixes the values; each section's key `patternProperties` match the exact id the
   pipeline writes. Of the published set's 95 files, 77 are byte-identical here, 17 differ (16 ClinVar-GKM files and

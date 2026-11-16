@@ -1,9 +1,9 @@
 """Selection on a pairing (ADR 0008 decision 4.1, ADR 0009 decision 5): `select` and `build --driver` take
 `--bundle-schema` and `--column-set`, and read the bundle's root by the pairing's rules (its version property, if
-any, and its sections) instead of a fixed `schema_version` line and the default bundle's sections.
+any, and its sections); since 2.0.0 a pairing is required (ADR 0009).
 
-Two real producers: the ClinVar-GKM excerpt with the shipped 1.1.0 schema set and column set given as a pairing,
-which must select exactly what the default path selects; and the CIViC bundles (tests/fixtures/civic/), which have
+Two real producers: the ClinVar-GKM excerpt with its 1.1.0 schema set and column set (a fixture) as the pairing,
+whose selection is records of the bundle byte for byte; and the CIViC bundles (tests/fixtures/civic/), which have
 no version, a pretty-printed layout, empty collections and root values. Expectations come from the source files
 parsed with stdlib json, not from the tool's reader.
 """
@@ -17,17 +17,11 @@ from pathlib import Path
 import duckdb
 import pytest
 from _fixture import FIXTURE, FIXTURES
+from _fixture import PAIRING as CLINVAR_PAIRING
 
 from clinvar_gkm_parquet.build import KV_PREFIX
 from clinvar_gkm_parquet.cli import main
 
-ROOT = Path(__file__).resolve().parents[1]
-CLINVAR_PAIRING = (
-    "--bundle-schema",
-    ROOT / "schemas" / "1.1.0",
-    "--column-set",
-    ROOT / "spec" / "sections" / "column-sets" / "1.1.0.columns.yaml",
-)
 CIVIC = FIXTURES / "civic"
 CIVIC_PAIRING = ("--bundle-schema", CIVIC / "schema-set", "--column-set", CIVIC / "civic.columns.yaml")
 CIVIC_BUNDLES = sorted(CIVIC.glob("civic-assertion-*-bundle.json"))
@@ -69,16 +63,20 @@ def kv_of(path: Path) -> dict[str, str]:
     ],
     ids=["out", "in"],
 )
-def test_a_pairing_selects_what_the_default_selects(tmp_path, capsys, opts):
-    rc, default_out, err = cli(capsys, "select", "--full", FIXTURE, "--out", tmp_path / "d.json.gz", *opts)
-    assert rc == 0, err
+def test_a_pairing_selects_records_of_the_bundle_byte_for_byte(tmp_path, capsys, opts):
     rc, paired_out, err = cli(
         capsys, "select", "--full", FIXTURE, *CLINVAR_PAIRING, "--out", tmp_path / "p.json.gz", *opts
     )
     assert rc == 0, err
-    assert (tmp_path / "p.json.gz").read_bytes() == (tmp_path / "d.json.gz").read_bytes()
-    assert selection_of(paired_out) == selection_of(default_out)
-    assert gzip.decompress((tmp_path / "p.json.gz").read_bytes()).startswith(b'{\n  "schema_version": "1.1.0",\n')
+    text = gzip.decompress((tmp_path / "p.json.gz").read_bytes())
+    assert text.startswith(b'{\n  "schema_version": "1.1.0",\n')
+
+    def records(data: bytes) -> set[bytes]:
+        return {ln.rstrip(b",") for ln in data.split(b"\n") if ln.startswith(b"    ")}
+
+    picked = records(text)
+    assert picked and picked <= records(gzip.decompress(FIXTURE.read_bytes()))
+    assert selection_of(paired_out)["selected_records"] == len(picked)
 
 
 def test_build_driver_takes_the_pairing(tmp_path, capsys):
@@ -94,23 +92,6 @@ def test_build_driver_takes_the_pairing(tmp_path, capsys):
     assert kv["bundle_schema_version"] == "1.1.0"
     rc, stdout, err = cli(capsys, "verify", tmp_path / "b", "--bundle-recompute", "--full", tmp_path / "s.json.gz")
     assert rc == 0, stdout + err
-
-
-def test_a_pairing_with_a_delta_is_refused(tmp_path, capsys):
-    rc, _, err = cli(
-        capsys,
-        "select",
-        "--full",
-        FIXTURE,
-        *CLINVAR_PAIRING,
-        "--delta",
-        FIXTURE,
-        "--driver",
-        "gene",
-        "--out",
-        tmp_path / "s.json.gz",
-    )
-    assert rc == 2 and "--bundle-schema and --column-set read one bundle: not with --delta" in err
 
 
 # --- CIViC: no version, pretty-printed, empty collections, root values -------------------------------------------
@@ -156,8 +137,9 @@ def test_civic_build_driver_builds_and_verifies_against_the_mini_bundle(tmp_path
     assert rc == 0, stdout + err
 
 
-def test_civic_without_its_pairing_is_still_refused(tmp_path, capsys):
+def test_a_selection_without_a_pairing_is_refused(tmp_path, capsys):
     rc, _, err = cli(
         capsys, "select", "--full", CIVIC_BUNDLES[0], "--driver", "assertion", "--out", tmp_path / "s.json.gz"
     )
-    assert rc == 2 and "no 'schema_version' at the root" in err
+    assert rc == 2 and "--bundle-schema and --column-set are required" in err
+    assert not (tmp_path / "s.json.gz").exists()

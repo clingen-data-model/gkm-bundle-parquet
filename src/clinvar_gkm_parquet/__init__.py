@@ -1,4 +1,4 @@
-"""Rebuild ClinVar-GKM's Parquet tables from its published JSON bundles."""
+"""Build Parquet tables from GKM JSON bundles, rebuild the bundle from them, and validate bundles."""
 
 from importlib.metadata import PackageNotFoundError, version
 

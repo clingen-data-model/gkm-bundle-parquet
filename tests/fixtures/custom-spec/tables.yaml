@@ -1,13 +1,14 @@
-# A custom table spec for the tests (tests/test_generic.py): typed tables that no shipped sql/<table>.sql
-# implements, so the generic renderer builds them from the derivation kinds alone (spec.py, ADR 0003). Types of
-# the typed copies are the clinvar-gkm 1.0 ones (spec/1.0/tables.yaml). Not a built-in spec: its output is never
-# the published set.
+# A hand-written table spec, as test data for the generic renderer (tests/test_generic.py): typed tables over
+# real records of the ClinVar-GKM excerpt, built from the derivation kinds alone (spec.py, sqltemplate.py). The
+# tool reads no tables.yaml since 2.0.0 (ADR 0008); the tests parse this one with spec.parse_spec. The nested
+# types are those of 1.x's clinvar-gkm 1.0 spec.
 name: summary-example
 spec_version: "0.1"
 status: draft
 bundle_schema_versions: ["1.1.0"]
 sources:
-  - "spec/1.0/tables.yaml (clinvar-gkm 1.0): the nested types of variation.mappings and scv.classification"
+  - "clinvar-gkm-parquet 1.x, spec/1.0/tables.yaml (clinvar-gkm 1.0): the nested types of variation.mappings and scv.classification"
+root: {version_property: schema_version, other_values: false}
 writer: {compression: zstd, row_group_size: 4096}
 tables:
   - name: variation_summary
@@ -41,11 +42,6 @@ tables:
         nulls: empty-list
         derivation: {kind: scalar-path, path: "$.mappings[*].coding.code", transform: null}
         description: The code of every mapping, in order.
-      - name: refs
-        type: STRUCT(path VARCHAR, section VARCHAR, id VARCHAR)[]
-        nulls: empty-list
-        derivation: {kind: refs, path: $, transform: null}
-        description: Every pointer in the record (as in the baseline spec).
       - name: data
         type: JSON
         nulls: never

@@ -12,9 +12,8 @@ Integration API:
 
 - `source` is an InputFile (read with BundleFileSource) or any RecordSource. A RecordSource gives one stream of
   `(section, key, record)` per pass, in section order and key order; the same stream on every pass. A bundle
-  file is one (BundleFileSource); a replayed delta state is another (wrap a re-iterable producer with
-  IterRecordSource). Keys are the JSON-encoded key bytes exactly as on a bundle line (or a staging line), and
-  records are the record bytes exactly as on the line, without the trailing comma.
+  file is one (BundleFileSource). Keys are the JSON-encoded key bytes exactly as on a bundle line (or a staging
+  line), and records are the record bytes exactly as on the line, without the trailing comma.
 - `seeds` maps a section to its starting keys (decoded strings). Every seed must exist, or SelectionError lists
   the missing ones.
 - `follow`: "out" adds every record a selected record points to; "in" adds every record that points to a
@@ -36,10 +35,10 @@ disk holds the output plus a compressed spool of the selected records, which shr
   Records are never JSON-parsed.
 - Depth is the shortest hop count, exactly as a breadth-first search gives it. A pass may assign depth d to a
   record only when every record of depth d - 2 or less is already selected (then no shorter path can exist), so
-  a pass completes one level and part of the next. Pointers mostly point to EARLIER sections (vcv -> proposition
-  -> variation -> allele -> location -> sequenceReference), so a hop back costs about one pass.
+  a pass completes one level and part of the next. In a bundle whose pointers mostly point to EARLIER sections
+  (a statement -> its proposition -> its variant -> its location), a hop back costs about one pass.
 - Pass 1 reads the whole source: it checks the sha256 (BundleFileSource, when an expected one is known), the
-  sections against the bundle's shape (its RootRules: the default bundle's, or a pairing's), the line grammar, and
+  sections against the bundle's shape (its RootRules, from the pairing), the line grammar, and
   the seeds. A later pass stops at the first section after which nothing is wanted, and skips sections with nothing
   wanted without parsing their keys. A re-opened bundle is checked against pass 1 (Tap), and every later pass's
   per-section record counts must equal pass 1's.
@@ -47,9 +46,9 @@ disk holds the output plus a compressed spool of the selected records, which shr
 - At the end, the spool is merged per section by source position into the mini-bundle (gzip, mtime 0, no file
   name, so the same inputs give the same bytes), which is re-read with bundle.stage_bundle to prove it valid.
 
-The root (ADR 0008 decision 4.1, ADR 0009): a BundleFileSource reads it by its RootRules, the default bundle's
-unless given a pairing's (compiled.reader_rules). The version property is the rules' (none, or optional, for a
-pairing), and the mini-bundle writes it only when the source has one. An empty collection (`"<section>": {}`) is
+The root (ADR 0008 decision 4.1, ADR 0009): a BundleFileSource reads it by its RootRules, the pairing's
+(compiled.reader_rules). The version property is the rules' (none, or optional), and the mini-bundle writes it
+only when the source has one. An empty collection (`"<section>": {}`) is
 read and selects nothing; a root value that isn't a collection, where the shape allows one, is copied to the
 mini-bundle verbatim, after its sections. A file in another JSON layout is read whole into the canonical line
 layout (bundle.py), when the rules allow the general reader; its sha256 is the file's.
@@ -88,10 +87,9 @@ from .bundle import (
     stage_bundle,
 )
 from .compat import KV_PREFIX
-from .default_pairing import reader_rules
 from .errors import BundleFormatError, InputError, SchemaVersionError, ToolError
 from .model import InputFile
-from .sources import open_stream
+from .transport import open_stream
 
 log = logging.getLogger(__name__)
 
@@ -114,9 +112,6 @@ _ROOT_MEMBER = re.compile(rb'  ("(?:[^"\\]|\\.)*"): (.+?)(,?)\n')  # an empty co
 def _version_line(prop: str) -> re.Pattern[bytes]:
     """Line 2 when it holds the version: `  "<prop>": "<version>",` (no comma when nothing follows)."""
     return re.compile(rb'  "' + re.escape(prop.encode("utf-8")) + rb'": "([^"\\]*)"(,?)\n')
-
-
-SCHEMA_LINE = _version_line("schema_version")  # the default bundle's line 2 (scripts/extract-fixtures.py)
 
 
 # A string VALUE that starts with "#/": its opening quote follows ':' (object member), '[' or ',' (array
@@ -231,83 +226,9 @@ class RecordSource(Protocol):
     name: str
     sha256: str | None
     schema_version: str
+    rules: RootRules  # how the root is read: its version property and sections
 
     def open_pass(self, number: int) -> AbstractContextManager[RecordPass]: ...
-
-
-class IterRecordSource:
-    """A RecordSource over a re-iterable producer: `records(pass_number)` returns an iterable of
-    `(section, key JSON bytes, record bytes)`, each section's records together, in section order and key order,
-    and the same sequence every time. The input for a replayed state (base full plus deltas)."""
-
-    sha256 = None
-
-    def __init__(
-        self, name: str, schema_version: str, records: Callable[[int], Iterable[tuple[str, bytes, bytes]]]
-    ):
-        self.name = name
-        self.schema_version = schema_version
-        self._records = records
-
-    def open_pass(self, number: int) -> AbstractContextManager[RecordPass]:
-        return _IterPass(self, self._records(number))
-
-
-class _IterPass:
-    bytes_read = None
-
-    def __init__(self, src: IterRecordSource, records: Iterable[tuple[str, bytes, bytes]]):
-        self.schema_version = src.schema_version
-        self._name = src.name
-        self._it = iter(records)
-        self.head: tuple[str, bytes, bytes] | None = None
-
-    def __enter__(self) -> _IterPass:
-        return self
-
-    def __exit__(self, *exc) -> bool:
-        close = getattr(self._it, "close", None)
-        if close is not None:
-            close()
-        return False
-
-    def sections(self) -> Iterator[_IterSection]:
-        self.head = next(self._it, None)
-        seen: set[str] = set()
-        while self.head is not None:
-            name = self.head[0]
-            if name in seen:
-                raise BundleFormatError(
-                    f"{self._name}: section {name!r} appears twice (a record source gives each section's records "
-                    "together)"
-                )
-            seen.add(name)
-            sec = _IterSection(self, name)
-            yield sec
-            sec.skip()
-
-
-class _IterSection:
-    def __init__(self, p: _IterPass, name: str):
-        self._p = p
-        self.name = name
-        self.count = 0
-        self._done = False
-
-    def __iter__(self) -> Iterator[tuple[bytes, bytes]]:
-        p = self._p
-        while not self._done:
-            head = p.head
-            if head is None or head[0] != self.name:
-                self._done = True
-                return
-            self.count += 1
-            p.head = next(p._it, None)
-            yield head[1], head[2]
-
-    def skip(self) -> None:
-        for _ in self:
-            pass
 
 
 class Tap(io.RawIOBase):
@@ -396,8 +317,8 @@ class BundleFileSource:
     """A bundle file (local path or https:// URL) as a RecordSource. Pass 1 opens `inp`; later passes call
     `reopen(pass_number)` for a fresh stream of the same bytes (default: open `inp` again), and are checked
     against pass 1 with a Tap. After pass 1, `sha256` and `size` are those of the bytes read; a mismatch with
-    `inp.expected_sha256` raises InputError. `rules` say how to read the root (default: the default bundle's). A
-    file in another layout is read whole, as the canonical line layout, if the rules allow the general reader."""
+    `inp.expected_sha256` raises InputError. `rules` say how to read the root (compiled.reader_rules). A file in
+    another layout is read whole, as the canonical line layout, if the rules allow the general reader."""
 
     def __init__(
         self,
@@ -405,13 +326,13 @@ class BundleFileSource:
         *,
         reopen: Callable[[int], BinaryIO] | None = None,
         checkpoint_bytes: int = CHECKPOINT_BYTES,
-        rules: RootRules | None = None,
+        rules: RootRules,
     ):
         self.input = inp
         self.name = inp.name
         self.sha256: str | None = None
         self.size: int | None = None
-        self.rules = rules if rules is not None else reader_rules()
+        self.rules = rules
         self._reopen = reopen
         self._every = checkpoint_bytes
         self._reference: Tap | None = None
@@ -831,7 +752,7 @@ class _HashingWriter(io.RawIOBase):
 
 
 def select(
-    source: RecordSource | InputFile,
+    source: RecordSource,
     seeds: Mapping[str, Iterable[str]],
     out_path: Path | str,
     *,
@@ -852,9 +773,7 @@ def select(
         raise SelectionError(f"follow must be out, in or both, not {follow!r}") from e
     if max_depth is not None and (not isinstance(max_depth, int) or max_depth < 0):
         raise SelectionError(f"max_depth must be a non-negative integer or None, not {max_depth!r}")
-    if isinstance(source, InputFile):
-        source = BundleFileSource(source)
-    rules = getattr(source, "rules", None) or reader_rules()
+    rules = source.rules
     names = rules.shape_of(source.schema_version).collections
     index = section_index(names)
     allowed_list = _allowed(sections, names, index)
@@ -1298,7 +1217,7 @@ def _validate(
 ) -> None:
     """Re-read the mini-bundle with stage_bundle: each staged section must hold exactly what was written, and the
     root values what the source held."""
-    inp = InputFile(str(path), name, None, sha, "explicit", size)
+    inp = InputFile(str(path), name, sha, "explicit", size)
     root_values: dict[str, bytes] = {}
     try:
         staged = stage_bundle(inp, work, rules, root_values=root_values)
