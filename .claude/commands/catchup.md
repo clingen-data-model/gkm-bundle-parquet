@@ -10,14 +10,13 @@ dump. Derive the picture from git and GitHub, never from a hand-maintained doc.
    `gh pr list --state merged --base main --limit 50 --json number,title,mergedAt,url,files` and read the bodies
    of those touching what the user is about to work on (ask if they didn't say). Read new or changed ADRs,
    plans, `.claude/rules/*.md`, `CLAUDE.md`, the table spec and the compatibility matrix.
-2. **ClinVar-GKM** (`clingen-data-model/clinvar-gkm`, local clone `~/Development/gks/clinvar-gks`). The tool
-   depends on it, so check both `origin/main` (dev) and `origin/1.0` (release line) for changes in range to:
+2. **ClinVar-GKM** (`clingen-data-model/clinvar-gkm`, local clone `~/Development/gks/clinvar-gks`), the first
+   producer and the source of the suite's fixtures and evidence runs. Check both `origin/main` (dev) and `origin/1.0` (release line) for changes in range to:
    - the bundle `schema_version` (`SCHEMA_VERSION` in `src/scripts/assemble-gkm-dicts.py`) and the bundle schema
-     `schema/clinvar-gkm/clinvar-gkm-bundle.schema.json`: a new version the tool must accept or refuse;
+     `schema/clinvar-gkm/clinvar-gkm-bundle.schema.json`, and its vendored pairing for this tool: a new pairing to test;
    - the assembler's output format (`assemble-gkm-dicts.py`, `gkm_json_cleanup.py`): the line-oriented reader
      depends on it;
-   - the BigQuery Parquet export (`src/scripts/parquet-schemas/*.sql`, `export-gkm-dicts.sh`,
-     `release-gkm-parquet.sh`): the oracle's reference;
+   - its Parquet release script, which runs this tool (`build`, `verify`) on its bundles;
    - the delta manifest and index (`build-delta-manifest.py`, `generate-r2-index.sh`) and the release-model docs;
    - ADRs in `docs/decisions/` (especially 0004, 0007, 0008) and `docs/parquet/tables.md`.
    Use `git -C ~/Development/gks/clinvar-gks log --oneline --since=... origin/1.0 -- <paths>`.

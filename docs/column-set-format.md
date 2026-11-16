@@ -2,12 +2,16 @@
 
 A **column set** is a YAML file a bundle producer publishes with a bundle schema. It states the Parquet tables built
 from bundles of that schema. A bundle schema says what a bundle *may* hold; the column set says what is *built*: which
-properties become columns, and what the schema leaves open. The tool compiles the two into a table spec
-([ADR 0006](decisions/0006-sections-spec-compiled-from-schemas.md)). Unreleased.
+properties become columns, and what the schema leaves open. The tool compiles the two, a *pairing*, into a table spec
+([ADR 0006](decisions/0006-sections-spec-compiled-from-schemas.md)). From 2.0.0 every `build`, `select` and `compile-spec`
+needs one: the tool has no default bundle and ships no producer's column set
+([ADR 0009](decisions/0009-generic-gkm-bundle-tool-renamed.md)). Examples: ClinVar-GKM's 1.1.0 column set
+(`tests/fixtures/clinvar-gkm/1.1.0/columns.yaml`; ClinVar-GKM publishes its own) and CIViC's
+(`tests/fixtures/civic/civic.columns.yaml`).
 
 ```sh
-clinvar-gkm-parquet build --bundle-schema my.schema.json --column-set my.columns.yaml --full my-bundle.json --out out/
-clinvar-gkm-parquet compile-spec --bundle-schema my.schema.json --column-set my.columns.yaml   # read the result
+gkm-bundle-parquet build --bundle-schema my.schema.json --column-set my.columns.yaml --full my-bundle.json --out out/
+gkm-bundle-parquet compile-spec --bundle-schema my.schema.json --column-set my.columns.yaml   # read the result
 ```
 
 ## A small example
@@ -25,7 +29,7 @@ sections:
 | --- | --- | --- |
 | `schema` | yes | The `$id` of the bundle schema it pairs with. Any other schema is refused. |
 | `sections` | yes | One entry per collection of the bundle: its properties, as shapes (below). |
-| `version_property` | no | The root property that holds the bundle's version, if it has one. |
+| `version_property` | no | The root property that holds the bundle's version, if it has one. There is no default name. |
 | `collections` | no | Root properties that are collections, only where the schema can't say. |
 | `key_order` | no | Tables whose line-layout bundle text isn't key-sorted. Default: every key sorted. |
 

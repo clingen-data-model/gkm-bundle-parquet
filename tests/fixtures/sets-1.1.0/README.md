@@ -9,7 +9,8 @@ them with a newer tool.
 
 A full `sections` build of `tests/fixtures/real-1.1.0/clinvar-gkm_excerpt.json.gz` (ClinVar-GKM 1.1.0), with the 1.1.0
 schema set and column set now in `tests/fixtures/clinvar-gkm/1.1.0/`. Built on 2026-11-16 by tool 1.1.0 (commit
-`0bf179a`, branch `feat/1.1.0-deprecations`) from a `git archive` of that commit, in its root:
+`0bf179a`, branch `feat/1.1.0-deprecations`) from a `git archive` of that commit, in its root (where the schema set and
+column set were still at these paths):
 
 ```sh
 clinvar-gkm-parquet build --full tests/fixtures/real-1.1.0/clinvar-gkm_excerpt.json.gz \
