@@ -183,6 +183,79 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+# --- deprecations (ADR 0009 decision 5, ADR 0008 decision 2): what 2.0.0 removes, a line each on stderr -----
+
+NEW_NAME = "gkm-bundle-parquet"
+NEW_REPOSITORY = "https://github.com/clingen-data-model/gkm-bundle-parquet"
+REMOVED_IN = "2.0.0"
+COMMANDS = ("build", "select", "rebuild", "verify", "compile-spec", "validate", "version")
+RELEASE_OPTIONS = ("release", "index", "delta", "manifest", "full_source_release")
+RETIRED_SPECS = {
+    "clinvar-gkm": "the 22-table set",
+    "baseline": "id, refs and data per section",
+}
+
+
+def _deprecated(message: str) -> None:
+    print(f"clinvar-gkm-parquet: deprecated: {message}", file=sys.stderr, flush=True)
+
+
+def _warn_old_name(argv: list[str]) -> None:
+    """Every invocation, before the arguments are parsed (so --help and a usage error say it too)."""
+    command = next((a for a in argv if not a.startswith("-")), None)
+    command = command if command in COMMANDS else None
+    run = f"{NEW_NAME} {command}" if command else NEW_NAME
+    _deprecated(
+        f"this tool is renamed {NEW_NAME} ({NEW_REPOSITORY}), and the name clinvar-gkm-parquet is removed in "
+        f"{REMOVED_IN}; from {REMOVED_IN}, install {NEW_NAME} and run `{run}`"
+    )
+
+
+def _retired_spec(arg: str) -> str | None:
+    """What a retired `--spec` value names: a retired built-in (with any version form), or a tables.yaml."""
+    from .spec import _BUILTIN_ARG, BUILTIN_SPECS
+
+    m = _BUILTIN_ARG.fullmatch(arg)
+    if m and m["name"] in BUILTIN_SPECS:
+        return RETIRED_SPECS.get(m["name"])
+    return "a tables.yaml"
+
+
+def _warn_deprecations(args: argparse.Namespace) -> None:
+    """The deprecated options and defaults these arguments use. Behaviour is unchanged; nothing on stdout."""
+    command = args.command
+    given = [o for o in RELEASE_OPTIONS if getattr(args, o, None)]
+    if given:
+        bundle = "the bundle" if command == "validate" else "one bundle with --full"
+        replacement = f"resolve the release yourself and pass {bundle} and --sha256, or a <file>.sha256 sidecar"
+        for o in given:
+            _deprecated(f"--{o.replace('_', '-')} is removed in {REMOVED_IN}; {replacement}")
+    spec = getattr(args, "spec", None)
+    retired = _retired_spec(spec) if spec is not None else None
+    if retired is not None:
+        _deprecated(
+            f"--spec {spec} ({retired}) is removed in {REMOVED_IN} (ADR 0008); use the default sections spec with "
+            "--bundle-schema and --column-set, and a column set for other tables"
+        )
+    if command == "verify" and getattr(args, "against", None) is not None:
+        _deprecated(
+            f"verify --against (the oracle comparison) is removed in {REMOVED_IN} (ADR 0008); check a set with "
+            "verify --bundle-recompute and verify --roundtrip"
+        )
+    if command == "compile-spec" and args.schema_version is not None:
+        _deprecated(
+            f"compile-spec <schema_version> (the built-in default bundle) is removed in {REMOVED_IN}; use "
+            "compile-spec --bundle-schema <schema> --column-set <column set>"
+        )
+    default_bundle = (command in ("build", "select") and retired is None) or command == "validate"
+    if default_bundle and getattr(args, "bundle_schema", None) is None:
+        pairing = "--bundle-schema" if command == "validate" else "--bundle-schema and --column-set"
+        _deprecated(
+            f"reading a bundle without --bundle-schema (the built-in default bundle) is removed in {REMOVED_IN}; "
+            f"give the bundle's schema with {pairing}"
+        )
+
+
 def _version(args: argparse.Namespace) -> int:
     from .compat import version_info
 
@@ -191,7 +264,8 @@ def _version(args: argparse.Namespace) -> int:
         print(json.dumps(info, indent=2))
     else:
         specs = ", ".join(
-            f"{s['name']} {s['version']} ({s['status']}{', default' if s['default'] else ''})"
+            f"{s['name']} {s['version']} ({s['status']}{', default' if s['default'] else ''}"
+            f"{', deprecated' if s['deprecated'] else ''})"
             for s in info["table_specs"]
         )
         print(
@@ -255,7 +329,10 @@ def _validate(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    _warn_old_name(argv)
     args = _parser().parse_args(argv)
+    _warn_deprecations(args)
     handler = {
         "build": _build,
         "select": _select,

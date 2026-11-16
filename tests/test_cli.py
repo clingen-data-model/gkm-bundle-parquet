@@ -17,6 +17,11 @@ def test_version_json(capsys):
     specs = {s["name"]: s for s in info["table_specs"]}
     assert set(specs) == {"sections", "baseline", "clinvar-gkm"} and specs["sections"]["default"]
     assert specs["sections"]["compiled"] and not specs["baseline"]["compiled"]
+    assert (
+        specs["baseline"]["deprecated"]
+        and specs["clinvar-gkm"]["deprecated"]
+        and not specs["sections"]["deprecated"]
+    )
     assert len(specs["sections"]["tables_by_schema_version"]["1.1.0"]) == len(specs["baseline"]["tables"]) == 20
     assert len(specs["clinvar-gkm"]["tables"]) == 22
 
