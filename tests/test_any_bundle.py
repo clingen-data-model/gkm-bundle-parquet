@@ -210,12 +210,15 @@ def test_a_pairing_flag_alone_is_refused(tmp_path, capsys):
     assert rc == 2 and "not both" in stderr
 
 
-def test_a_pairing_isnt_mixed_with_another_spec_a_delta_or_a_selection(tmp_path, capsys):
+def test_a_pairing_isnt_mixed_with_another_spec_or_a_delta(tmp_path, capsys):
+    """A selection takes a pairing since 1.1.0 (tests/test_generic_selection.py)."""
     full = CIVIC_BUNDLES[0]
     rc, _, stderr = cli(capsys, "build", *PAIRING, "--spec", "baseline", "--full", full, "--out", tmp_path / "o")
     assert rc == 2 and "not with --spec baseline" in stderr
-    rc, _, stderr = cli(capsys, "build", *PAIRING, "--driver", "gene", "--full", full, "--out", tmp_path / "o")
-    assert rc == 2 and "not with --driver or --delta" in stderr
+    rc, _, stderr = cli(
+        capsys, "select", *PAIRING, "--delta", full, "--driver", "gene", "--full", full, "--out", tmp_path / "o"
+    )
+    assert rc == 2 and "not with --delta" in stderr
 
 
 def test_a_column_set_for_another_schema_is_refused(tmp_path, capsys):
