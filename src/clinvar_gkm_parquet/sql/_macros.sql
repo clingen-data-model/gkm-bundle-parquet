@@ -49,39 +49,6 @@ CREATE OR REPLACE MACRO cgp_known_keys(rec, allowed, ctx, k) AS
       list_filter(json_keys(rec), lambda f: NOT list_contains(allowed, f))::VARCHAR))
   END;
 
--- The evidence-line table a bundle evidenceLine key belongs to, by id shape (design plan §3.3):
--- clinvar.submission:SCV<n>.<v> -> evidenceLine; VCV<n>.<v>-... -> vcv_evidenceLine; RCV<n>.<v>-... ->
--- rcv_evidenceLine. Any other shape fails. (Each regex runs only on the keys with its literal prefix.)
-CREATE OR REPLACE MACRO cgp_evidence_line_table(k, ctx) AS
-  CASE
-    WHEN starts_with(k, 'clinvar.submission:SCV') AND regexp_matches(k, '^clinvar\.submission:SCV[0-9]+\.[0-9]+$')
-      THEN 'evidenceLine'
-    WHEN starts_with(k, 'VCV') AND regexp_matches(k, '^VCV[0-9]+\.[0-9]+-') THEN 'vcv_evidenceLine'
-    WHEN starts_with(k, 'RCV') AND regexp_matches(k, '^RCV[0-9]+\.[0-9]+-') THEN 'rcv_evidenceLine'
-    ELSE cgp_fail(ctx, k, 'evidence-line id of no known shape (clinvar.submission:SCV<n>.<v>, VCV<n>.<v>-..., RCV<n>.<v>-...)')
-  END;
-
--- A VRS coordinate: a definite integer, or NULL when it is a Range ([min, max] list), which the *_min/*_max
--- columns read instead. Any other shape fails.
-CREATE OR REPLACE MACRO cgp_coordinate(j, ctx, k) AS
-  CASE
-    WHEN j IS NULL OR json_type(j) IN ('NULL', 'ARRAY') THEN NULL
-    ELSE CAST(cgp_scalar(j, ctx, k, '(column)') AS BIGINT)
-  END;
-
--- One bound of a VRS coordinate: the integer itself, else element i (0 = min, 1 = max) of the Range.
-CREATE OR REPLACE MACRO cgp_coordinate_bound(j, i, ctx, k) AS
-  CASE
-    WHEN j IS NULL OR json_type(j) = 'NULL' THEN NULL
-    WHEN json_type(j) = 'ARRAY' THEN
-      CASE
-        WHEN json_array_length(j) <> 2
-          THEN cgp_fail(ctx, k, concat('a Range must have 2 elements: ', j::VARCHAR))
-        ELSE CAST(cgp_scalar(json_extract(j, concat('$[', i, ']')), ctx, k, concat('[', i, ']')) AS BIGINT)
-      END
-    ELSE CAST(cgp_scalar(j, ctx, k, '(column)') AS BIGINT)
-  END;
-
 -- TRUE, or a failure when the record's own `id` (when present and not null) is not its bundle key. Every
 -- known_fields table checks it: the key column stands for the record's id.
 CREATE OR REPLACE MACRO cgp_record_id(j, ctx, k) AS
@@ -137,8 +104,8 @@ CREATE OR REPLACE MACRO cgp_range_bound(j, i, ctx, k) AS
     lambda r: CASE WHEN json_type(r) = 'ARRAY' THEN CAST(json_extract(r, concat('$[', i, ']')) AS BIGINT)
                    ELSE CAST(r AS BIGINT) END))[1];
 
--- Round trip (roundtrip.py, ADR 0005). JSON text of a string as ClinVar-GKM's producer (Python json.dumps with
--- ensure_ascii=False) writes it: DuckDB's to_json, except that a \u escape (control characters) gets lower-case
+-- Round trip (roundtrip.py, ADR 0005). JSON text of a string as Python's json.dumps (with ensure_ascii=False)
+-- writes it: DuckDB's to_json, except that a \u escape (control characters) gets lower-case
 -- hex digits, as Python writes them. x is used three times: pass a column, a struct field or a lambda variable.
 CREATE OR REPLACE MACRO cgp_json_lower_u(j) AS
   array_to_string(list_transform(regexp_extract_all(j, '\\u[0-9A-Fa-f]{4}|\\.|[^\\]+'),

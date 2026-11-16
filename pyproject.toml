@@ -1,7 +1,7 @@
 [project]
 name = "clinvar-gkm-parquet"
 version = "1.1.0"
-description = "Rebuild ClinVar-GKM's Parquet tables from its published JSON bundles"
+description = "Build Parquet tables from GKM JSON bundles, rebuild the bundle from them, and validate bundles"
 readme = "README.md"
 license = "CC0-1.0"
 license-files = ["LICENSE"]

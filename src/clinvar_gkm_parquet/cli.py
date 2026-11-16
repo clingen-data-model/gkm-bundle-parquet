@@ -59,7 +59,8 @@ def _engine(p: argparse.ArgumentParser) -> None:
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="clinvar-gkm-parquet",
-        description="Rebuild ClinVar-GKM's Parquet tables from its published JSON bundles.",
+        description="Build Parquet tables from GKM JSON bundles, rebuild the bundle from them, and validate "
+        "bundles.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -109,7 +110,7 @@ def _parser() -> argparse.ArgumentParser:
         "also checks that they compile to that spec.",
     )
     v.add_argument("dir", type=Path)
-    v.add_argument("--bundle-recompute", action="store_true", help="id sets and data against the bundle(s)")
+    v.add_argument("--bundle-recompute", action="store_true", help="id sets and data against the bundle")
     v.add_argument(
         "--roundtrip",
         action="store_true",
