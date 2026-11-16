@@ -15,6 +15,8 @@ from pathlib import Path
 import duckdb
 from _fixture import FIXTURE, SECTIONS
 
+from clinvar_gkm_parquet.canonical import Hasher
+from clinvar_gkm_parquet.roundtrip import check_rows, source_digest
 from clinvar_gkm_parquet.spec import Table
 from clinvar_gkm_parquet.sqltemplate import macros_sql, render_generic
 
@@ -90,3 +92,13 @@ def rows(con: duckdb.DuckDBPyConnection, name: str) -> list[dict]:
     cur = con.execute(f'SELECT * FROM "{name}"')
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
+
+
+def roundtrip_check(con: duckdb.DuckDBPyConnection, table: Table, work: Path) -> None:
+    """The build's round-trip check of the table (roundtrip.check_rows): write it from render_generic to Parquet,
+    hash its section's records, and check every row written back against them. Raises RoundTripError."""
+    path = work / f"{table.name}.parquet"
+    con.execute(f"COPY (SELECT * FROM ({render_generic(table)}) ORDER BY id) TO '{path}' (FORMAT parquet)")
+    hasher = Hasher(workers=1)
+    digest = source_digest(con, table.sections[0], hasher, work, keep=True)
+    check_rows(con, table, path, digest, hasher)

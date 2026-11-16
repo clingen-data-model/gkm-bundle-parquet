@@ -28,9 +28,8 @@ declaration with no shape keyword (`required`, `contains`, `minItems`) says noth
 the rules can't read (`if`, `patternProperties`, ...) makes the position opaque, so only the column set can state
 it.
 
-Order: a key-sorted table (`key_order` absent, the default) has its columns and fields in schema order, then the
-open positions in column-set order. A table in `key_order` takes every order from the column set, because a
-line-layout bundle's text depends on it.
+Order: a table has its columns and fields in schema order, then the open positions in column-set order. The round
+trip doesn't depend on it: it is record-identical, so key order doesn't count (ADR 0008 decision 1.2).
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ from .errors import CompileError, SchemaSetError
 from .schemas import SchemaSet, split_ref
 
 SPEC_NAME = "sections"
-RULES_VERSION = "1.0"  # the version of these rules
+RULES_VERSION = "2.0"  # the version of these rules
 EXTENSIONS, ID = "extensions", "id"
 WRITER = {"compression": "snappy", "row_group_size": 122880}
 JSON_TEXT = "json"  # the column set's shape for a property kept as JSON text
@@ -206,7 +205,6 @@ class _Compiler:
         self.parts = root_parts(schema_set, self.version_property, column_set.get("collections") or ())
         self.section_names = list(self.parts.collections)
         self.section = ""
-        self.ordered = False  # the table is in `key_order`
         self.path: frozenset[str] = frozenset()  # the classes open on the way to the current position
 
     # --- errors --------------------------------------------------------------------------------------------------
@@ -452,9 +450,7 @@ class _Compiler:
         return self.order(fields, shape)
 
     def order(self, fields: dict, shape: dict) -> list[str]:
-        """The column set's order for a table in `key_order`; else schema order, then the open positions."""
-        if self.ordered:
-            return list(shape)
+        """Schema order, then the open positions in column-set order."""
         return [k for k in fields if k in shape] + [k for k in shape if k not in fields]
 
     # --- extensions ----------------------------------------------------------------------------------------------
@@ -571,8 +567,6 @@ class _Compiler:
 
     def table(self, name: str) -> dict:
         self.section, self.path = name, frozenset()
-        order = self.column_set.get("key_order") or {}
-        self.ordered = name in order
         record = self.record_alts(name)
         if record.fields is None:
             record = replace(record, fields={}, closed=False)  # a collection the column set declares, classless
@@ -589,9 +583,7 @@ class _Compiler:
                 columns.extend(self.columns(prop, decls, shape[prop], slots, renames.get(prop, prop)))
         where = "The record's position in its bundle section (0 = its first record line)."
         columns.append(_column("ordinal", "BIGINT", "never", _derive("ordinal", None, None), where))
-        layout: dict = {"key_order": "columns" if self.ordered else "sorted", "record_id": ID in shape}
-        if self.ordered:
-            layout.update(self.sorted_columns(name, order[name], columns))
+        layout = {"record_id": ID in shape}
         described = self.schema_set.bundle["properties"][name].get("description")
         table = {
             "name": name,
@@ -611,21 +603,6 @@ class _Compiler:
         v = self.value(decls, shape, ID)
         if v.type != "VARCHAR" or v.pointers:
             raise self.stop(ID, "the record's id must be a string, the bundle key", "not list it as anything else")
-
-    def sorted_columns(self, name: str, entry: object, columns: list[dict]) -> dict:
-        if entry is None:
-            return {}
-        if not (
-            isinstance(entry, dict)
-            and set(entry) == {"sorted_columns"}
-            and isinstance(entry["sorted_columns"], list)
-        ):
-            raise self.bad_entry("(key_order)", f"an entry is null or {{sorted_columns: [...]}}, not {entry!r}")
-        have = {c["name"] for c in columns}
-        unknown = [c for c in entry["sorted_columns"] if c not in have]
-        if unknown:
-            raise self.bad_entry("(key_order)", f"sorted_columns names {unknown}, which are not columns of {name}")
-        return {"sorted_columns": list(entry["sorted_columns"])}
 
     def columns(
         self, prop: str, decls: list[_Decl], shape: object, slots: dict[str, str], name: str
@@ -701,16 +678,11 @@ class _Compiler:
                 f"{where}: it says it pairs with schema {doc.get('schema')!r}, but the schema's $id is "
                 f"{schema_id!r}"
             )
-        for key in ("key_order", "sections"):
-            entries = doc.get(key) or {}
-            if not isinstance(entries, dict):
-                raise CompileError(f"{where}: {key} must be a mapping")
-            stray = [s for s in entries if s not in self.section_names]
-            if stray:
-                raise CompileError(
-                    f"{where}: {key} names {stray}, not collections of the schema "
-                    f"({', '.join(self.section_names)})"
-                )
+        stray = [s for s in doc.get("sections") or {} if s not in self.section_names]
+        if stray:
+            raise CompileError(
+                f"{where}: sections names {stray}, not collections of the schema ({', '.join(self.section_names)})"
+            )
         if ROOT_VALUES_TABLE in self.section_names:
             raise CompileError(f"{where}: a collection can't be named {ROOT_VALUES_TABLE}, the root values' table")
 
@@ -868,15 +840,6 @@ def compile_sections(schema_set: SchemaSet, column_set: dict) -> dict:
     """The spec of `schema_set` and its column set, as a mapping (module docstring). Raises CompileError naming the
     section and position when the two don't determine a table."""
     return _Compiler(schema_set, column_set).spec()
-
-
-def spec_for_sorted_input(raw: dict) -> dict:
-    """The spec for a bundle read through the general reader, whose records come with every key sorted: `key_order`
-    applies only to line-layout text, so every table is key-sorted. Columns and their order stay."""
-    tables = []
-    for t in raw["tables"]:
-        tables.append({**t, "json": {"key_order": "sorted", "record_id": t["json"]["record_id"]}})
-    return {**raw, "tables": tables}
 
 
 def table_spec_sha256(raw: dict) -> str:

@@ -96,10 +96,12 @@ def _parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser(
         "rebuild",
-        help="write a full lossless build (the sections spec) back as its source bundle, byte for byte",
-        description="Write the bundle a full build of the sections spec was made from: its uncompressed text "
-        "byte for byte (ADR 0005), checked against the sha256s the build recorded. Reads the spec the build wrote "
-        "beside its manifest; needs no schema. Refuses a selection, a build with --tables (or, by 1.x, from "
+        help="write a full lossless build (the sections spec) back as its source bundle, record-identical",
+        description="Write the bundle a full build of the sections spec was made from, record-identical "
+        "(ADR 0008: every record by key, the same canonical form; key order, array order, string escapes, number "
+        "spelling and whitespace don't count; docs/round-trip.md), checked against the records sha256s the build "
+        "recorded. Reads the spec the build wrote beside its manifest; needs no schema. A set built by tool 1.x "
+        "records none: it is written unchecked. Refuses a selection, a build with --tables (or, by 1.x, from "
         "deltas) and a directory without its manifest.",
     )
     r.add_argument("dir", type=Path, help="the built directory")
@@ -118,8 +120,9 @@ def _parser() -> argparse.ArgumentParser:
     v.add_argument(
         "--roundtrip",
         action="store_true",
-        help="rebuild the bundle text (hashed, not written) and compare it with the recorded sha256s; with "
-        "--full, also with that bundle's uncompressed text (a full lossless build only, ADR 0005)",
+        help="rebuild the bundle's records (hashed, not written) and compare their records sha256s with the "
+        "recorded ones; with --full, also with that bundle's own (a full lossless build only; a set built by tool "
+        "1.x needs --full)",
     )
     v.add_argument(
         "--full",

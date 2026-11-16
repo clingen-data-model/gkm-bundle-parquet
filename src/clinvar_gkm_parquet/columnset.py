@@ -17,7 +17,7 @@ from .errors import CompileError
 from .schemas import default_cache_dir
 from .transport import is_url, read_all
 
-TOP_KEYS = frozenset({"schema", "version_property", "collections", "key_order", "sections"})
+TOP_KEYS = frozenset({"schema", "version_property", "collections", "sections"})
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,11 @@ def parse_column_set(raw: bytes, source: str) -> ColumnSet:
 def check_keys(doc: object, source: str) -> None:
     if not isinstance(doc, dict):
         raise CompileError(f"column set {source}: not a mapping")
+    if "key_order" in doc:
+        raise CompileError(
+            f"column set {source}: key_order is gone in tool 2.0.0: the round trip is record-identical, so key "
+            "order doesn't count (ADR 0008 decision 1.2); remove it"
+        )
     unknown = sorted(set(doc) - TOP_KEYS)
     if unknown:
         raise CompileError(f"column set {source}: unknown key(s) {unknown} (it may hold {sorted(TOP_KEYS)})")

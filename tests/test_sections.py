@@ -18,10 +18,10 @@ import re
 import duckdb
 import pytest
 from _fixture import SECTIONS, SPEC, SPEC_SOURCE
-from _tables_helpers import connect, read_fixture, rows
+from _tables_helpers import connect, read_fixture, roundtrip_check, rows
 
 from clinvar_gkm_parquet import build, sqltemplate
-from clinvar_gkm_parquet.errors import SpecError
+from clinvar_gkm_parquet.errors import RoundTripError, SpecError
 from clinvar_gkm_parquet.spec import RANGE_KINDS, check_compiled, parse_spec
 from clinvar_gkm_parquet.sqltemplate import canonical_type, render_generic
 
@@ -46,7 +46,7 @@ def _table(con, table, fast=True) -> list[dict]:
 
 
 def test_the_spec_is_compiled():
-    assert (SOURCE.name, SOURCE.version, SOURCE.builtin, SOURCE.path) == ("sections", "1.0", True, None)
+    assert (SOURCE.name, SOURCE.version, SOURCE.builtin, SOURCE.path) == ("sections", "2.0", True, None)
     assert SOURCE.schema_set_sha256 and SOURCE.column_set_sha256 and SPEC.root is not None
 
 
@@ -427,16 +427,12 @@ def test_record_id_not_the_key_stops_the_build():
     _fails(sections, SPEC.table("variation"), needle)
 
 
-def test_record_id_absent():
+def test_record_id_absent(tmp_path):
     """A sections table states that its records carry their id (json.record_id), so one without it can't be written
     back, and the round-trip check stops it."""
     sections, key = _mutated("variation", lambda k, r: "id" in r, lambda rec: rec.pop("id"))
-    _fails(
-        sections,
-        SPEC.table("variation"),
-        f"table variation: round trip: key {key}",
-        "differs from the bundle line",
-    )
+    with pytest.raises(RoundTripError, match=f"table variation: round trip: key {key}: .* differs"):
+        roundtrip_check(connect(sections), SPEC.table("variation"), tmp_path)
 
 
 def test_unknown_top_level_property_stops_the_build():
@@ -455,7 +451,7 @@ def test_range_of_another_shape_stops_the_build(value):
     assert "expected an integer or a Range [min, max] of integers or nulls, got " in msg
 
 
-def test_range_null_ends_and_absent():
+def test_range_null_ends_and_absent(tmp_path):
     """An absent coordinate is NULL in all three columns. [null, null], a Range of two open ends, reads the same
     (all NULL), so it can't be written back: the round-trip check stops the build (the producer writes none)."""
     sections, key = _mutated("location", lambda k, r: "start" in r, lambda rec: rec.pop("start"))
@@ -465,7 +461,8 @@ def test_range_null_ends_and_absent():
     sections, key = _mutated(
         "location", lambda k, r: "start" in r, lambda rec: rec.__setitem__("start", [None, None])
     )
-    _fails(sections, SPEC.table("location"), f"table location: round trip: key {key}")
+    with pytest.raises(RoundTripError, match=f"table location: round trip: key {key}: .* differs from the bundle"):
+        roundtrip_check(connect(sections), SPEC.table("location"), tmp_path)
 
 
 # --- fail loud: when the spec loads ----------------------------------------------------------------------------

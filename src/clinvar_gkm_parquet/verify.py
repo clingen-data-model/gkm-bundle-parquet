@@ -38,7 +38,7 @@ from .build import (
     table_groups,
 )
 from .bundle import ROOT_VALUES_TABLE
-from .compiled import compile_pairing, for_sorted_input, is_recorded, recorded_spec
+from .compiled import compile_pairing, is_recorded, recorded_spec
 from .errors import InputError, SpecError
 from .model import BuildInputs
 from .spec import SPEC_KV_KEYS, Spec
@@ -104,10 +104,9 @@ def spec_for_dir(con: duckdb.DuckDBPyConnection, out_dir: Path) -> Spec:
 
 def pairing_problems(out_dir: Path, bundle_schema: str, column_set: str) -> list[str]:
     """Whether a pairing compiles to the spec that wrote the files: its table_spec_sha256, schema_set_sha256 and
-    column_set_sha256 against the ones every file records. Empty: it does. A bundle the general reader normalized
-    was written with the key-sorted form of the pairing's spec (compiled.for_sorted_input), which matches too."""
-    spec, source = compile_pairing(str(bundle_schema), str(column_set))
-    table_spec = {source.sha256, for_sorted_input(spec, source)[1].sha256}
+    column_set_sha256 against the ones every file records. Empty: it does."""
+    _, source = compile_pairing(str(bundle_schema), str(column_set))
+    table_spec = {source.sha256}
     con = duckdb.connect()
     try:
         kvs = dir_kv(con, out_dir)
@@ -489,9 +488,8 @@ class VerifyReport:
             rt = self.roundtrip
             lines += ["## Round trip", ""]
             lines += [f"- {p}" for p in rt["problems"]] or [
-                f"The rebuilt text ({rt['text_size']} bytes, sha256 `{rt['text_sha256']}`) matches "
-                + ", ".join(rt["checked"])
-                + "."
+                f"The rebuilt records ({rt['text_size']} bytes of text, records sha256 `{rt['records_sha256']}`) "
+                "match " + ", ".join(rt["checked"]) + ": record-identical."
             ]
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
@@ -589,8 +587,7 @@ def _summary(r: VerifyReport) -> str:
     if r.recompute is not None:
         parts.append(f"bundle recompute: {sum(recompute_failed(g) for g in r.recompute)} group(s) differ")
     if r.roundtrip is not None:
-        word = "JSON-equal" if r.roundtrip.get("promise") == "json-equal" else "identical"
-        parts.append(f"round trip: {word if r.roundtrip['passed'] else 'DIFFERS'}")
+        parts.append(f"round trip: {'identical' if r.roundtrip['passed'] else 'DIFFERS'}")
     lines = [f"verify {'pass' if r.passed else 'DIFFERENCES'}: " + "; ".join(parts)]
     lines += [f"  {p}" for p in r.spec_problems[:20]]
     if r.roundtrip is not None:

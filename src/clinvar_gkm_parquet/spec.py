@@ -39,10 +39,8 @@ Format (as a mapping; the compiler writes it):
             someExtension: value_string   # extension name -> the slot field that holds its value
           classification: json-type       # or: each extension fills the slot of its value's JSON type (below)
         json:                             # optional: how a row is written back as its record (below)
-          key_order: columns              # columns | sorted
           record_id: true                 # the record has its own id, equal to the key
-          sorted_columns: [extensions]    # optional (key_order columns): columns whose values are key-sorted
-    lossless: true                        # optional (default false): the spec encodes the bundle text (below)
+    lossless: true                        # optional (default false): the spec encodes the bundle's records (below)
     root: {version_property: <name or null>, other_values: <bool>}  # how a bundle's root is read
 
 Extension slots: an extension struct is `STRUCT(name VARCHAR, <other fields>, value_<slot> <type>, ...)`; the
@@ -93,22 +91,22 @@ a `json` block has its pointers checked against their targets (the build's round
 `ordinal` (derivation kind; BIGINT, nulls never, no path): the record's position in its bundle section, 0 for the
 section's first record line, in the bundle's order. It is derived from the bundle (ADR 0001).
 
-`json` (a table's JSON layout, ADR 0005): how a row is written back as its bundle record, byte for byte. The key
-column is the record's `id` property when `record_id` (the record has none otherwise); each other column is the
-top-level property its path names, except that the range columns of one path (range-exact, range-min,
-range-max) are one integer-or-Range property, and pointer-section and ordinal columns are no property (a
-pointer-section column gives the section of the multi-target bare-id column of the same path). `key_order:
-columns` writes the properties in column order and every object in its STRUCT field order, an extension's
-`value_*` slots as one `value` at the first slot's place; `sorted` sorts every key of the record by its UTF-8
-bytes, at every depth; `sorted_columns` sorts the values of those columns only. A `json`
-block also changes the build: an absent list inside a typed value is NULL, not `[]` (so NULL is absent and `[]`
-empty at every depth, as at the top level), and every row is written back as JSON and compared with its bundle
-line (key and record, byte for byte); any difference stops the build.
+`json` (a table's JSON layout, ADR 0005): how a row is written back as its bundle record. The key column is the
+record's `id` property when `record_id` (the record has none otherwise); each other column is the top-level
+property its path names, except that the range columns of one path (range-exact, range-min, range-max) are one
+integer-or-Range property, and pointer-section and ordinal columns are no property (a pointer-section column gives
+the section of the multi-target bare-id column of the same path). The properties are written in column order and
+every object in its STRUCT field order, an extension's `value_*` slots as one `value` at the first slot's place. A
+`json` block also changes the build: an absent list inside a typed value is NULL, not `[]` (so NULL is absent and
+`[]` empty at every depth, as at the top level), and every row is written back as a record and compared with its
+bundle record by their canonical forms (canonical.py; ADR 0008 decisions 1.2, 1.3: key order, array order, string
+escapes, number spelling and whitespace don't count); any difference stops the build. A `json` block written by
+tool 1.x may also hold `key_order` and `sorted_columns`, which are read and ignored.
 
-`lossless: true`: the spec is a lossless encoding of the bundle's uncompressed text (ADR 0005), which
-`clinvar-gkm-parquet rebuild` writes back. Every table needs a `json` block and an `ordinal` column as its last
-column; each section of each bundle schema_version has exactly one table, with no row filter and with
-`known_fields`; and the JSON layout must place every column (roundtrip.lossless_problems).
+`lossless: true`: the spec encodes every record of the bundle (ADR 0005, amended by ADR 0008), which
+`clinvar-gkm-parquet rebuild` writes back, record-identical. Every table needs a `json` block and an `ordinal`
+column as its last column; each section has exactly one table, with no row filter and with `known_fields`; and the
+JSON layout must place every column (roundtrip.lossless_problems).
 
 `known_fields: true`: every top-level field of a record must be read by some column at a path `$.<field>`; a
 record with another top-level field stops the build. It needs every column with a path to read a top-level field
@@ -172,8 +170,10 @@ _TABLE_OPTIONAL = {"extension_slots", "sort_key_unique", "known_fields", "json"}
 _COLUMN_KEYS = {"name", "type", "nulls", "derivation", "description"}
 _DERIVATION_KEYS = {"kind", "path", "transform", "pointers", "targets"}
 _DERIVATION_OPTIONAL = {"pointers", "targets"}
-_JSON_KEYS = {"key_order", "record_id", "sorted_columns"}
-KEY_ORDERS = ("columns", "sorted")
+_JSON_KEYS = {"record_id"}
+# A set built by tool 1.x carries these in its table-spec.json (the byte-identical round trip's key order). Read
+# and ignored, so verify and rebuild still read that set: key order doesn't count (ADR 0008 decision 1.2).
+_LEGACY_JSON_KEYS = {"key_order", "sorted_columns"}
 # Paths (module docstring). LIST_PATH: fields, each optionally followed by [*]; FIELD_PATH: fields only.
 LIST_PATH_RE = re.compile(r"\$(?:\.\w+(?:\[\*\])*)+")
 FIELD_PATH_RE = re.compile(r"\$(?:\.\w+)+")
@@ -220,9 +220,7 @@ class Column:
 class JsonLayout:
     """A table's `json` block: how a row is written back as its bundle record (module docstring)."""
 
-    key_order: str  # columns | sorted
     record_id: bool
-    sorted_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -274,7 +272,7 @@ class Spec:
     writer: dict
     tables: tuple[Table, ...]
     name: str | None = None  # required in a compiled spec; may be absent only in a mapping given to parse_spec
-    lossless: bool = False  # the spec encodes the bundle text: `rebuild` writes it back (ADR 0005)
+    lossless: bool = False  # the spec encodes every record of the bundle: `rebuild` writes them back (ADR 0005)
     root: RootFormat | None = None  # how a bundle's root is read (ADR 0006); required to build
 
     def table(self, name: str) -> Table:
@@ -480,7 +478,7 @@ def parse_spec(raw: object, where: str = "tables.yaml", *, require_name: bool = 
         known_fields = t.get("known_fields", False)
         if not isinstance(known_fields, bool):
             raise SpecError(f"{tw}: known_fields must be true or false")
-        layout = _json_layout(t["json"], col_names, tw) if "json" in t else None
+        layout = _json_layout(t["json"], tw) if "json" in t else None
         tables.append(
             Table(
                 name=t["name"],
@@ -512,21 +510,11 @@ def _section_list(v: object) -> bool:
     return isinstance(v, list) and bool(v) and all(isinstance(x, str) and x for x in v)
 
 
-def _json_layout(raw: object, col_names: set[str], tw: str) -> JsonLayout:
-    j = _keys(raw, _JSON_KEYS, {"key_order", "record_id"}, f"{tw}: json")
-    if j["key_order"] not in KEY_ORDERS:
-        raise SpecError(f"{tw}: json.key_order must be one of {KEY_ORDERS}")
+def _json_layout(raw: object, tw: str) -> JsonLayout:
+    j = _keys(raw, _JSON_KEYS | _LEGACY_JSON_KEYS, {"record_id"}, f"{tw}: json")
     if not isinstance(j["record_id"], bool):
         raise SpecError(f"{tw}: json.record_id must be true or false")
-    sorted_columns = j.get("sorted_columns", [])
-    if not (isinstance(sorted_columns, list) and all(isinstance(c, str) for c in sorted_columns)):
-        raise SpecError(f"{tw}: json.sorted_columns must be a list of column names")
-    unknown = [c for c in sorted_columns if c not in col_names]
-    if unknown:
-        raise SpecError(f"{tw}: json.sorted_columns names unknown column(s) {unknown}")
-    if sorted_columns and j["key_order"] == "sorted":
-        raise SpecError(f"{tw}: json.sorted_columns is for key_order columns (sorted sorts every key)")
-    return JsonLayout(key_order=j["key_order"], record_id=j["record_id"], sorted_columns=tuple(sorted_columns))
+    return JsonLayout(record_id=j["record_id"])
 
 
 # --- rules -----------------------------------------------------------------------------------------------------

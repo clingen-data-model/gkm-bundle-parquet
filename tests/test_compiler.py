@@ -23,7 +23,7 @@ from _input_helpers import local_input
 
 from clinvar_gkm_parquet import build as build_mod
 from clinvar_gkm_parquet.columnset import load_column_set, parse_column_set
-from clinvar_gkm_parquet.compiler import compile_sections, root_parts, spec_for_sorted_input, table_spec_sha256
+from clinvar_gkm_parquet.compiler import compile_sections, root_parts, table_spec_sha256
 from clinvar_gkm_parquet.errors import CompileError
 from clinvar_gkm_parquet.model import BuildInputs
 from clinvar_gkm_parquet.roundtrip import rebuild
@@ -71,19 +71,16 @@ def _column_facts(t: Table, *, ordered: bool) -> dict:
     return facts
 
 
-# Accepted differences between the compiled spec and tests/fixtures/sections-golden/tables.yaml, beyond the column
-# and field order of the key-sorted tables (the bundle text doesn't depend on it). Empty: the compiler reproduces
-# every table.
+# Accepted differences between the compiled spec and tests/fixtures/sections-golden/tables.yaml, beyond column and
+# STRUCT field order (a record's canonical form doesn't depend on it; the golden spec's key_order tables take the
+# column set's order, which tool 2.0.0 dropped). Empty: the compiler reproduces every table.
 ACCEPTED_DIFFERENCES: dict[str, list[str]] = {}
 
 
 @pytest.mark.parametrize("golden", GOLDEN.tables, ids=lambda t: t.name)
 def test_compiled_table_equals_the_golden_table(golden):
     t = COMPILED.table(golden.name)
-    ordered = golden.json.key_order == "columns"
-    if ordered:
-        assert [c.name for c in t.columns] == [c.name for c in golden.columns]
-    got, want = _column_facts(t, ordered=ordered), _column_facts(golden, ordered=ordered)
+    got, want = _column_facts(t, ordered=False), _column_facts(golden, ordered=False)
     differ = sorted(n for n in set(got) | set(want) if got.get(n) != want.get(n))
     assert differ == ACCEPTED_DIFFERENCES.get(golden.name, []), [(n, got.get(n), want.get(n)) for n in differ]
     assert t.columns[0].name == "id" and t.columns[-1].name == "ordinal"
@@ -100,19 +97,20 @@ def test_tables_are_the_bundle_schema_collections_in_order():
 
 def test_compiled_spec_keeps_the_top_level_facts():
     assert COMPILED.lossless and COMPILED.writer == GOLDEN.writer
-    assert (COMPILED.name, COMPILED.spec_version) == (GOLDEN.name, GOLDEN.spec_version)
+    # The golden spec is the 1.0 research; tool 2.0.0 dropped key_order, a major change (compiler.RULES_VERSION).
+    assert (COMPILED.name, COMPILED.spec_version, GOLDEN.spec_version) == (GOLDEN.name, "2.0", "1.0")
     assert COMPILED.bundle_schema_versions == ("1.1.0",)
     assert SCHEMAS.sha256 in COMPILED.sources[0]
     assert (COMPILED.root.version_property, COMPILED.root.other_values) == ("schema_version", False)
 
 
 def test_the_source_records_the_pairing():
-    assert (SOURCE.name, SOURCE.version, SOURCE.builtin, SOURCE.path) == ("sections", "1.0", True, None)
+    assert (SOURCE.name, SOURCE.version, SOURCE.builtin, SOURCE.path) == ("sections", "2.0", True, None)
     assert SOURCE.schema_set_sha256 == SCHEMAS.sha256 and SOURCE.column_set_sha256 == COLUMN_SET.sha256
     assert SOURCE.sha256 == table_spec_sha256(compile_sections(SCHEMAS, COLUMN_SET.doc))
 
 
-def test_sorted_tables_take_schema_order_and_key_order_tables_the_column_sets():
+def test_tables_take_schema_order():
     assert [c.name for c in COMPILED.table("location").columns] == [
         "id",
         "type",
@@ -132,13 +130,6 @@ def test_sorted_tables_take_schema_order_and_key_order_tables_the_column_sets():
         "id",
         "type",
         "name",
-        "ordinal",
-    ]
-    doc["key_order"]["submitter"] = None
-    assert [c.name for c in parse_spec(compile_sections(SCHEMAS, doc)).table("submitter").columns] == [
-        "id",
-        "name",
-        "type",
         "ordinal",
     ]
 
@@ -180,11 +171,11 @@ def built(tmp_path_factory) -> tuple[Path, Path]:
     return root / "compiled", root / "golden"
 
 
-def test_build_with_the_compiled_spec_rebuilds_the_bundle_text(built, tmp_path):
+def test_build_with_the_compiled_spec_rebuilds_the_bundle_records(built, tmp_path):
     out = tmp_path / "rebuilt.json"
     result = rebuild(built[0], out)
-    assert out.read_bytes() == gzip.decompress(FIXTURE.read_bytes())
-    assert result.text_sha256 == result.expected_text_sha256 and result.promise == "byte-identical"
+    assert json.loads(out.read_bytes()) == json.loads(gzip.decompress(FIXTURE.read_bytes()))
+    assert result.checked and result.records_sha256 == result.expected_records_sha256
 
 
 @pytest.mark.parametrize("golden", GOLDEN.tables, ids=lambda t: t.name)
@@ -233,7 +224,6 @@ def test_rewording_leaves_the_checksum_unchanged(change):
         lambda r: r["tables"][0]["columns"].reverse(),
         lambda r: r["tables"][0]["columns"][1]["derivation"].update(path="$.other"),
         lambda r: r["tables"][1]["columns"][3]["derivation"].update(targets=["gene"]),
-        lambda r: r["tables"][0]["json"].update(key_order="columns"),
         lambda r: r["tables"][0]["json"].update(record_id=True),
         lambda r: r["root"].update(version_property=None),
         lambda r: r["tables"].reverse(),
@@ -243,15 +233,6 @@ def test_changing_what_builds_the_tables_changes_the_checksum(change):
     raw = _raw()
     change(raw)
     assert table_spec_sha256(raw) != SOURCE.sha256
-
-
-def test_the_spec_for_sorted_input_changes_only_the_key_order():
-    raw = _raw()
-    sorted_raw = spec_for_sorted_input(raw)
-    assert table_spec_sha256(sorted_raw) != SOURCE.sha256
-    for before, after in zip(raw["tables"], sorted_raw["tables"], strict=True):
-        assert before["columns"] == after["columns"]
-        assert after["json"] == {"key_order": "sorted", "record_id": before["json"]["record_id"]}
 
 
 # --- column-set strictness ---------------------------------------------------------------------------------------
@@ -269,11 +250,6 @@ def _set_path(doc: dict, path: tuple, value: object) -> None:
     [
         # Never used.
         (lambda o: o["sections"].update(notASection={"id": None}), r"sections names \['notASection'\]"),
-        (lambda o: o["key_order"].update(notASection=None), r"key_order names \['notASection'\]"),
-        (
-            lambda o: o["key_order"].update(condition={"sorted_columns": ["nope"]}),
-            r"section condition.*sorted_columns names \['nope'\], which are not columns of condition",
-        ),
         (
             lambda o: o["sections"].update(gene=None),
             "section gene: .*the collection has no entry in the column set",
@@ -343,6 +319,13 @@ def test_a_bad_column_set_entry_stops_the_compile(change, message):
     change(doc)
     with pytest.raises(CompileError, match=message):
         compile_sections(SCHEMAS, doc)
+
+
+def test_a_column_set_with_key_order_is_refused():
+    doc = columns()
+    doc["key_order"] = {"submitter": None}
+    with pytest.raises(CompileError, match="key_order is gone in tool 2.0.0"):
+        parse_column_set(yaml.safe_dump(doc).encode(), "test")
 
 
 def test_the_record_id_cant_be_renamed():
@@ -591,7 +574,7 @@ def test_an_integer_or_range_at_the_top_level_is_three_columns_and_may_be_rename
         ("n_min", "BIGINT", "range-min", "$.n"),
         ("n_max", "BIGINT", "range-max", "$.n"),
     ]
-    assert t.json.record_id is True and t.json.key_order == "sorted"
+    assert t.json.record_id is True
     doc = all_of(schema_set)
     doc["sections"]["t"] = {"id": None, "n as m": None}
     t = parse_spec(compile_sections(schema_set, doc)).table("t")

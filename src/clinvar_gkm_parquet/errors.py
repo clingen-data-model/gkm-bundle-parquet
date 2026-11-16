@@ -36,6 +36,7 @@ class CompileError(ToolError):
 
 
 class RoundTripError(ToolError):
-    """A rebuild can't reproduce the source bundle's text exactly: the directory is not a full lossless build
-    (a selection, a set built from deltas by 1.x, a missing table or ordinal, a spec that is not lossless), a
-    pointer's section is unknown, or the rebuilt text's sha256 differs from the recorded one (ADR 0005)."""
+    """The round trip fails (ADR 0005, amended by ADR 0008): a built row doesn't write back as its bundle record,
+    or a rebuild can't reproduce the source bundle's records: the directory is not a full lossless build (a
+    selection, a set built from deltas by 1.x, a missing table or ordinal, a spec that is not lossless), a
+    pointer's section is unknown, or a rebuilt records sha256 differs from the recorded one."""

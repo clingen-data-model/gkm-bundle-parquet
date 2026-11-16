@@ -18,7 +18,7 @@ import yaml
 
 from .bundle import BundleShape, RootRules
 from .columnset import load_column_set
-from .compiler import compile_sections, spec_for_sorted_input, table_spec_sha256
+from .compiler import compile_sections, table_spec_sha256
 from .errors import SpecError
 from .schemas import load_schema_set
 from .spec import Spec, SpecSource, check_compiled, parse_spec
@@ -50,11 +50,6 @@ def compile_pairing(schema_source: str, column_set_source: str) -> tuple[Spec, S
     column_set = load_column_set(column_set_source)
     raw = compile_sections(schema_set, column_set.doc)
     return _from_raw(raw, schema_set.sha256, column_set.sha256)
-
-
-def for_sorted_input(spec: Spec, source: SpecSource) -> tuple[Spec, SpecSource]:
-    """The spec for a bundle the general reader normalizes (compiler.spec_for_sorted_input)."""
-    return _from_raw(spec_for_sorted_input(source.raw), source.schema_set_sha256, source.column_set_sha256)
 
 
 def reader_rules(spec: Spec) -> RootRules:

@@ -104,7 +104,7 @@ def test_the_pairing_builds_the_sections_spec(tmp_path, capsys):
     """The sections spec, one table per section, keyed by the bundle key, with no `data` column."""
     out = tmp_path / "out"
     rc, stdout, _ = cli(capsys, "build", *FULL, "--out", out)
-    assert rc == 0 and "built 20 table(s) of spec sections 1.0, 331 rows" in stdout
+    assert rc == 0 and "built 20 table(s) of spec sections 2.0, 331 rows" in stdout
     assert sorted(p.stem for p in out.glob("*.parquet")) == sorted(SECTIONS)
     records = parse_bundle(FIXTURE)
     con = duckdb.connect()
@@ -115,13 +115,13 @@ def test_the_pairing_builds_the_sections_spec(tmp_path, capsys):
         props = {p for _, r in records.get(s, []) for p in json.loads(r)} - {"id"}
         assert props <= set(cols) | {"start", "end"}  # location's start/end are the loc_* range columns
     meta = kv(out / "scv.parquet")
-    assert (meta["table_spec"], meta["table_spec_version"]) == ("sections", "1.0")
+    assert (meta["table_spec"], meta["table_spec_version"]) == ("sections", "2.0")
     assert "selection" not in meta and "table_spec_builtin" not in meta
     m = json.loads((out / "manifest.json").read_text())
     source = SPEC_SOURCE
     assert m["table_spec"] == {
         "name": "sections",
-        "version": "1.0",
+        "version": "2.0",
         "builtin": True,
         "sha256": source.sha256,
         "schema_set_sha256": source.schema_set_sha256,
@@ -282,7 +282,7 @@ def test_follow_modes_depth_and_sections(tmp_path, capsys, follow, depth):
 @pytest.mark.parametrize(
     "opts, message",
     [
-        (["--driver", "nope"], "--driver nope: not a table of spec sections 1.0"),
+        (["--driver", "nope"], "--driver nope: not a table of spec sections 2.0"),
         (["--driver", "vcv", "--where", "id = 'x'; DROP TABLE t"], "a ';' is not allowed"),
         (
             ["--driver", "vcv", "--where", "id = 'no-such-vcv'"],

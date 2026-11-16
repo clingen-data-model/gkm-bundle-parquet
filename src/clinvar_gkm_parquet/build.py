@@ -35,7 +35,7 @@ from pathlib import Path
 
 import duckdb
 
-from . import __version__, bundle, compiled, sources, sqltemplate
+from . import __version__, bundle, canonical, compiled, roundtrip, sources, sqltemplate
 from .compat import KV_PREFIX
 from .errors import BundleFormatError, InputError, SchemaVersionError, SpecError, ToolError
 from .model import (
@@ -46,7 +46,6 @@ from .model import (
     StreamedBundle,
     TableResult,
 )
-from .roundtrip import promise_of
 from .spec import Spec, SpecSource, Table
 from .spec import kv_metadata as spec_kv_metadata
 from .transport import open_stream
@@ -65,8 +64,8 @@ KV_KEYS = (
 )
 # Every key, in the order it is written: KV_KEYS, plus the spec's name (build() always writes it), the keys of a
 # custom or compiled spec
-# (spec.kv_metadata), in a lossless build only the sha256 of the table's section text (ADR 0005; bundle.py) and,
-# in a selective build only, the selection (ADR 0004; select.SELECTION_METADATA_KEY).
+# (spec.kv_metadata), in a lossless build only its section's records sha256 (ADR 0008 decision 1.3; canonical.py)
+# and, in a selective build only, the selection (ADR 0004; select.SELECTION_METADATA_KEY).
 KV_ORDER = (
     "tool_version",
     "table_spec",
@@ -81,12 +80,12 @@ KV_ORDER = (
     "source_deltas",
     "source_release",
     "duckdb_version",
-    "section_text_sha256",
+    "section_records_sha256",
     "selection",
 )
 # Keys whose value differs from file to file of one build.
-KV_PER_FILE = ("table", "section_text_sha256")
-EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()  # the text of a section the bundle doesn't have
+KV_PER_FILE = ("table", "section_records_sha256")
+EMPTY_SHA256 = canonical.EMPTY_SHA256  # the records sha256 of a section with no records
 DERIVED_LABEL = "derived from the bundle; may be regenerated"
 MANIFEST_NAME = "manifest.json"  # provisional (design plan §7.3)
 
@@ -476,13 +475,15 @@ def build_tables(
     counts: dict[str, int] | None = None,
     on_section_done: Callable[[str], None] | None = None,
     log: Callable[[str], None] | None = None,
+    check: Callable[[Table, Path], None] | None = None,
 ) -> list[TableResult]:
     """Write and self-check `<out_dir>/<table>.parquet` for each named table (design plan §6.2 steps 3-4).
 
     `con` must hold `bundle_<section>` for every section the tables read. Each file is written to a `.tmp` name
     and renamed only after its checks pass (for a row-filter group: after the whole group passes), so a failed
-    build never leaves a file that looks valid. `on_section_done(section)` is called once no remaining table
-    reads that section. Returns the results in build order.
+    build never leaves a file that looks valid. `check(table, path)` is the round trip's row check (roundtrip.py),
+    run on each written file of a table with a `json` block. `on_section_done(section)` is called once no
+    remaining table reads that section. Returns the results in build order.
     """
     render = render or render_table
     unknown = [n for n in table_names if n not in {t.name for t in spec.tables}]
@@ -512,6 +513,8 @@ def build_tables(
             except duckdb.Error as e:
                 raise SpecError(f"table {table.name}: query failed: {e}") from e
             _check_table(con, table, tmp)
+            if check is not None and table.json is not None:
+                check(table, tmp)
             fps[table.name] = _fingerprint_file(con, tmp, key_column(table), record_column(table))
             group = groups[table.name]
             if not group.complete:
@@ -659,11 +662,8 @@ class SectionPipeline:
         log: Callable[[str], None] | None = None,
         queue_size: int | None = None,
         chunk_bytes: int | None = None,
-        text_digests: bool = False,
     ):
         self.inputs, self.spec, self.work = inputs, spec, Path(work)
-        self.text_digests = text_digests  # hash the bundle's text, whole and per section (bundle.py)
-        self.section_text_sha256: dict[str, str] = {}  # section -> sha256 of its record lines, with text_digests
         self.schema_version: str | None = None
         self.rules = compiled.reader_rules(spec)
         self.sections: tuple[str, ...] = ()  # the bundle's sections in schema order, from begin()
@@ -692,7 +692,7 @@ class SectionPipeline:
         worker.start()
         try:
             self.log(f"streaming {inputs.full.name}")
-            full = bundle.stream_bundle(inputs.full, self, self.rules, text_digests=self.text_digests)
+            full = bundle.stream_bundle(inputs.full, self, self.rules)
             for s in self.sections:  # sections after the bundle's last one
                 if s not in self.counts:
                     self._absent_section(s)
@@ -798,10 +798,6 @@ class SectionPipeline:
     def close_section(self, section: str) -> None:
         self._close(section)
 
-    def section_text(self, section: str, sha256: str) -> None:
-        """The sha256 of the section's record lines (text_digests), before close_section hands it over."""
-        self.section_text_sha256[section] = sha256
-
     def root_value(self, name: str, value: bytes) -> None:
         self.root_values[name] = value
 
@@ -879,13 +875,16 @@ def write_manifest(
     started_at: str,
     ended_at: str,
     spec_sha256: str | None = None,
+    records_sha256: str | None = None,
 ) -> dict:
     """The dataset manifest (design plan §7.3). It carries timestamps, so unlike the Parquet files it is not
     byte-reproducible. `table_spec` names the spec as the files' key-value metadata does (plus the sha256 of its
     tables.yaml when known); `selection`, present only for a selective build, is the files' selection entry as
     an object. `inputs` and the source keys name the bundle read; `sections` counts the records the tables were
     built from (for a selective build, the mini-bundle's). `source_release` and `release` are null: the tool reads
-    one bundle and doesn't know which release it is, so a producer that publishes the manifest fills them."""
+    one bundle and doesn't know which release it is, so a producer that publishes the manifest fills them.
+    `records_sha256`, for a lossless build only, is the bundle's records sha256 (roundtrip.py), which `rebuild`
+    checks."""
     spec_name = kv.get("table_spec") or spec.name
     subset = " (a selection; see selection)" if "selection" in kv else ""
     manifest = {
@@ -941,12 +940,11 @@ def write_manifest(
     }
     if "selection" in kv:
         manifest["selection"] = json.loads(kv["selection"])
-    if full.text_sha256 is not None:
-        # A lossless build (ADR 0005): the full's uncompressed text, which `rebuild` writes back.
-        manifest["source_text_sha256"] = full.text_sha256
-        manifest["source_text_size"] = full.text_size
+    if records_sha256 is not None:
+        # A lossless build (ADR 0005, amended by ADR 0008): the bundle's records, which `rebuild` writes back.
+        manifest["records_sha256"] = records_sha256
         manifest["source_root"] = list(full.root)
-        manifest["round_trip"] = {"promise": promise_of(full.layout), "source_layout": full.layout}
+        manifest["round_trip"] = {"promise": roundtrip.RECORD_IDENTICAL, "source_layout": full.layout}
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 
@@ -1034,12 +1032,6 @@ def build(
     first, writing a mini-bundle in the work directory, and the tables are built from it (ADR 0004): every file
     and the manifest then carry the selection, while the source keys and `inputs` still name the bundle given.
     Without one, the selection code is never reached. `render` defaults to `render_table`."""
-    if (
-        spec_source is not None
-        and spec_source.raw is not None
-        and bundle.layout_of(inputs.full) != bundle.LINE_LAYOUT
-    ):
-        spec, spec_source = compiled.for_sorted_input(spec, spec_source)
     render = render or render_table
     names = list(dict.fromkeys(tables)) if tables else [t.name for t in spec.tables]
     unknown = [n for n in names if n not in {t.name for t in spec.tables}]
@@ -1077,6 +1069,7 @@ def build(
         shutil.rmtree(work)
     kv: dict[str, str] = {}
     results: dict[str, TableResult] = {}
+    hasher = canonical.Hasher()
     try:
         selected = None
         if driver is not None:
@@ -1096,9 +1089,10 @@ def build(
         else:
             read = inputs
             full_sha = read_sha = (inputs.full.expected_sha256 or _prehash(inputs.full, log)).lower()
-        # A lossless spec built in full: the files record the bundle's text, which `rebuild` writes back
-        # (ADR 0005). A selection is not the bundle's text.
+        # A lossless spec built in full: the files record the bundle's records sha256s, which `rebuild` checks
+        # (ADR 0005, ADR 0008). A selection is not the bundle.
         lossless = spec.lossless and driver is None
+        section_records: dict[str, str] = {}
 
         def on_begin(pipe: SectionPipeline, schema_version: str) -> None:
             kv.update(
@@ -1113,11 +1107,18 @@ def build(
 
         def process(con: duckdb.DuckDBPyConnection, section: str, rows: int) -> None:
             con.execute(sqltemplate.macros_sql())
-            kv_s = kv
-            if lossless:
-                kv_s = {**kv, "section_text_sha256": pipe.section_text_sha256.get(section, EMPTY_SHA256)}
+            names = by_section[section]
+            checked = any(spec.table(n).json is not None for n in names)
+            kv_s, check = kv, None
+            if checked or lossless:  # every record's canonical sha256, for the row check and the kv
+                digest = roundtrip.source_digest(con, section, hasher, work / "records", keep=checked)
+                if lossless:
+                    section_records[section] = digest.sha256
+                    kv_s = {**kv, "section_records_sha256": digest.sha256}
+                if checked:
+                    check = lambda table, path: roundtrip.check_rows(con, table, path, digest, hasher)  # noqa: E731
             done = build_tables(
-                con, spec, by_section[section], out_dir, kv_s, render=render, counts={section: rows}, log=log
+                con, spec, names, out_dir, kv_s, render=render, counts={section: rows}, log=log, check=check
             )
             results.update((r.table, r) for r in done)
 
@@ -1132,7 +1133,6 @@ def build(
             threads=threads,
             keep_work=keep_work,
             log=log,
-            text_digests=lossless,
         )
         state = pipe.run()
         if state.full.sha256 != read_sha:
@@ -1147,6 +1147,16 @@ def build(
             ordered.append(write_root_values(pipe.root_values, spec, out_dir, kv))
         if spec_source is not None and spec_source.raw is not None:
             compiled.write_compiled(spec_source, out_dir)
+        records_sha256 = None
+        if lossless:
+            members = roundtrip.root_members(
+                state.full.root,
+                pipe.rules.version_property,
+                state.full.schema_version,
+                pipe.root_values,
+                set(pipe.sections),
+            )
+            records_sha256 = canonical.records_sha256(section_records, canonical.root_sha256(members))
         manifest_path = out_dir / MANIFEST_NAME
         write_manifest(
             manifest_path,
@@ -1159,6 +1169,7 @@ def build(
             started_at=started_at,
             ended_at=_now(),
             spec_sha256=spec_source.sha256 if spec_source else None,
+            records_sha256=records_sha256,
         )
         return BuildResult(
             out_dir=out_dir,
@@ -1175,6 +1186,7 @@ def build(
         (out_dir / f"{bundle.ROOT_VALUES_TABLE}.parquet").unlink(missing_ok=True)
         raise
     finally:
+        hasher.close()
         if not keep_work:
             shutil.rmtree(work, ignore_errors=True)
             if created_root:

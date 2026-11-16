@@ -20,7 +20,7 @@ import pytest
 import yaml
 from _fixture import FIXTURE, FIXTURES, SECTIONS, SPEC_SOURCE
 from _fixture import PAIRING as CLINVAR_PAIRING
-from _input_helpers import local_input
+from _input_helpers import independent_records_sha256, local_input
 
 from clinvar_gkm_parquet import transport
 from clinvar_gkm_parquet.build import KV_PREFIX
@@ -87,13 +87,13 @@ def test_civic_builds_one_table_per_collection_and_keeps_its_root_values(civic):
     assert json.loads(values["metadata"]) == doc["metadata"] and values["failedAssertionIds"] == "[]"
 
 
-def test_civic_verify_and_roundtrip_state_json_equal(civic, capsys):
+def test_civic_verify_and_roundtrip_state_record_identical(civic, capsys):
     source, out = civic
     rc, stdout, stderr = cli(capsys, "verify", out)
     assert rc == 0, stdout + stderr
     rc, stdout, stderr = cli(capsys, "verify", out, "--roundtrip", "--full", source)
     assert rc == 0, stdout + stderr
-    assert "round trip: JSON-equal" in stdout and "identical" not in stdout
+    assert "round trip: identical" in stdout
 
 
 def test_civic_bundle_recompute_passes_on_the_general_reader(civic, tmp_path, capsys):
@@ -102,20 +102,20 @@ def test_civic_bundle_recompute_passes_on_the_general_reader(civic, tmp_path, ca
     assert rc == 0 and "bundle recompute: 0 group(s) differ" in stdout, stdout + stderr
 
 
-def test_civic_rebuild_is_json_equal_to_the_source_and_says_so(civic, tmp_path, capsys):
+def test_civic_rebuild_is_record_identical_to_the_source_and_says_so(civic, tmp_path, capsys):
     source, out = civic
     rebuilt = tmp_path / "rebuilt.json"
     rc, stdout, stderr = cli(capsys, "rebuild", out, "-o", rebuilt)
     assert rc == 0, stderr
     assert json.loads(rebuilt.read_text()) == json.loads(source.read_text())
-    assert "JSON-equal to the source" in stdout and "byte for byte" not in stdout
-    assert json.loads((out / "manifest.json").read_text())["round_trip"] == {
-        "promise": "json-equal",
-        "source_layout": "json",
-    }
+    m = json.loads((out / "manifest.json").read_text())
+    assert m["round_trip"] == {"promise": "record-identical", "source_layout": "json"}
+    assert f"records sha256 {m['records_sha256']} (matches the manifest's" in stdout
+    assert "record-identical to the source" in stdout
 
 
-def test_civic_rebuilt_in_the_line_layout_rebuilds_byte_for_byte(civic, tmp_path, capsys):
+def test_civic_rebuilt_in_the_line_layout_has_the_same_records_sha256(civic, tmp_path, capsys):
+    """The pretty-printed source and its rebuild in the line layout are different text with the same records."""
     _, out = civic
     canonical = tmp_path / "canonical.json"
     assert cli(capsys, "rebuild", out, "-o", canonical)[0] == 0
@@ -125,8 +125,10 @@ def test_civic_rebuilt_in_the_line_layout_rebuilds_byte_for_byte(civic, tmp_path
     second = tmp_path / "second.json"
     rc, stdout, stderr = cli(capsys, "rebuild", again, "-o", second)
     assert rc == 0, stderr
-    assert second.read_bytes() == canonical.read_bytes() and "byte for byte" in stdout
-    assert json.loads((again / "manifest.json").read_text())["round_trip"]["promise"] == "byte-identical"
+    assert second.read_bytes() == canonical.read_bytes() and "record-identical" in stdout
+    first, then = (json.loads((d / "manifest.json").read_text()) for d in (out, again))
+    assert then["round_trip"] == {"promise": "record-identical", "source_layout": "line"}
+    assert then["records_sha256"] == first["records_sha256"]
 
 
 def test_civic_empty_collections_are_tables_with_no_rows(civic):
@@ -263,20 +265,21 @@ def test_the_sub_bundle_takes_the_general_reader(sub_bundle):
     kv = kv_of(sub_bundle / "scv.parquet")
     source = SPEC_SOURCE
     assert kv["bundle_schema_version"] == "1.1.0" and kv["schema_set_sha256"] == source.schema_set_sha256
-    # Its keys came sorted, so the spec the set carries is the key-sorted one, with the same columns.
+    # Key order doesn't count, so the set carries the same spec as a set built from the line layout.
     written = json.loads((sub_bundle / COMPILED_SPEC_FILE).read_text())
-    assert all(t["json"]["key_order"] == "sorted" for t in written["tables"])
-    assert kv["table_spec_sha256"] == table_spec_sha256(written) != source.sha256
-    assert [t["columns"] for t in written["tables"]] == [t["columns"] for t in source.raw["tables"]]
+    assert kv["table_spec_sha256"] == table_spec_sha256(written) == source.sha256
 
 
-def test_the_sub_bundle_rebuilds_json_equal(sub_bundle, tmp_path, capsys):
+def test_the_sub_bundle_rebuilds_record_identical(sub_bundle, tmp_path, capsys):
     rc, stdout, stderr = cli(capsys, "rebuild", sub_bundle, "-o", tmp_path / "r.json")
     assert rc == 0, stderr
-    assert json.loads((tmp_path / "r.json").read_text()) == json.loads(SUB_BUNDLE.read_text())
-    assert "JSON-equal" in stdout
+    source = json.loads(SUB_BUNDLE.read_text())
+    assert json.loads((tmp_path / "r.json").read_text()) == source
+    assert "record-identical to the source" in stdout
+    m = json.loads((sub_bundle / "manifest.json").read_text())
+    assert m["records_sha256"] == independent_records_sha256(source, set(SECTIONS))
     rc, stdout, stderr = cli(capsys, "verify", sub_bundle, "--roundtrip", "--full", SUB_BUNDLE)
-    assert rc == 0 and "round trip: JSON-equal" in stdout, stdout + stderr
+    assert rc == 0 and "round trip: identical" in stdout, stdout + stderr
 
 
 def test_a_selection_reads_a_bundle_in_another_layout(tmp_path, capsys):
@@ -426,9 +429,6 @@ class Sink:
     def root_value(self, name, value):
         self.events.append(("value", name, value))
 
-    def section_text(self, name, sha):
-        self.events.append(("text", name))
-
 
 RULES = RootRules("v", lambda version: BundleShape(("a", "b", "c"), True))
 
@@ -459,12 +459,12 @@ def test_the_general_reader_sorts_keys_and_orders_by_schema(tmp_path):
     )
 
 
-def test_the_line_grammar_reads_empty_collections_and_root_values_byte_for_byte(tmp_path):
+def test_the_line_grammar_reads_empty_collections_and_root_values_as_written(tmp_path):
     text = (
         b'{\n  "v": "1",\n  "a": {},\n  "m": {"z":1,"a":2},\n'
         b'  "b": {\n    "k": {"y":1,"x":2}\n  },\n  "n": []\n}\n'
     )
-    streamed, events = _stream(tmp_path, text, text_digests=True)
+    streamed, events = _stream(tmp_path, text)
     assert streamed.layout == "line" and streamed.root == ("v", "a", "m", "b", "n")
     assert ("value", "m", b'{"z":1,"a":2}') in events and ("value", "n", b"[]") in events
     assert ("record", b'"k"', b'{"y":1,"x":2}') in events
@@ -612,15 +612,17 @@ def excerpt_copy(excerpt_set, tmp_path) -> Path:
     return d
 
 
-def test_the_excerpt_set_holds_its_spec_and_rebuilds_byte_for_byte(excerpt_set, tmp_path, capsys):
+def test_the_excerpt_set_holds_its_spec_and_rebuilds_record_identical(excerpt_set, tmp_path, capsys):
     source = SPEC_SOURCE
     written = json.loads((excerpt_set / COMPILED_SPEC_FILE).read_text())
     assert table_spec_sha256(written) == source.sha256
     m = json.loads((excerpt_set / "manifest.json").read_text())
-    assert m["round_trip"] == {"promise": "byte-identical", "source_layout": "line"}
+    assert m["round_trip"] == {"promise": "record-identical", "source_layout": "line"}
+    want = independent_records_sha256(json.loads(gzip.decompress(FIXTURE.read_bytes())), set(SECTIONS))
+    assert m["records_sha256"] == want
     rc, stdout, _ = cli(capsys, "rebuild", excerpt_set, "-o", tmp_path / "r.json")
-    assert rc == 0 and "byte for byte" in stdout
-    assert (tmp_path / "r.json").read_bytes() == gzip.decompress(FIXTURE.read_bytes())
+    assert rc == 0 and f"records sha256 {want} (matches" in stdout
+    assert json.loads((tmp_path / "r.json").read_text()) == json.loads(gzip.decompress(FIXTURE.read_bytes()))
 
 
 @pytest.mark.parametrize("command", ["verify", "verify --roundtrip", "rebuild"])
@@ -689,7 +691,7 @@ def test_a_manifest_that_disagrees_with_the_files_is_found(excerpt_copy, tmp_pat
 # --- the package knows no producer -------------------------------------------------------------------------------
 
 # What a move of the core to another package takes: it imports nothing outside itself (ADR 0006).
-CORE = ("compiler", "schemas", "columnset", "bundle", "transport", "errors", "model")
+CORE = ("compiler", "schemas", "columnset", "bundle", "canonical", "transport", "errors", "model")
 # No module and no SQL file names a producer or its URLs (ADR 0009). The neutral exception: the tool's own name
 # (distribution, package and key-value prefix), which says "clinvar" until the rename (ADR 0009 decision 3).
 TOOL_NAMES = re.compile(r"clinvar-gkm-parquet|clinvar_gkm_parquet")
