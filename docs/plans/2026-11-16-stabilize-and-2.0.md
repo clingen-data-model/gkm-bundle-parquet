@@ -42,9 +42,9 @@ Parquet from it. Additive features come after 2.0.0.
 | PR #13 closed; merged branches and worktrees removed | Done |
 | CI: docs-only PRs skip tests, superseded PR runs cancelled, `pytest -n auto` | Done, #18 (`61bc14c`) |
 | Test ids made stable under `-n auto` (gzip `mtime=0`) | Done, #19 (`ad3a4eb`) |
-| 1.1.0: rebase #17 on `main`, CI, review, merge, release (`release-tool` skill) | In progress |
-| GCS: the two frozen oracle reference Parquet folders (`gs://clinvar-gkm/oracle/1.1.0-2026-10-18/`, `…/1.1.0-2026-10-24/`) | Maintainer to decide: delete or keep. The reports and the key-order measurement stay |
-| `transport.py`: closing a stream whose request never opened raises `'_HttpStream' object has no attribute '_resp'` (a warning in the test run) | To do, a small fix |
+| 1.1.0: rebase #17 on `main`, CI, review, merge, release (`release-tool` skill) | Done, #17 (`ce1cfd6`), tag `v1.1.0`; on PyPI 2026-11-16, clean `uvx` install checked |
+| GCS: the two frozen oracle reference Parquet folders (`gs://clinvar-gkm/oracle/1.1.0-2026-10-18/`, `…/1.1.0-2026-10-24/`) | Gone: neither folder exists (checked 2026-11-16); the maintainer chose to delete them. `oracle/reports-1.0.1/` and `oracle/keyorder-2026-10-31/` stay |
+| `transport.py`: closing a stream whose request never opened raises `'_HttpStream' object has no attribute '_resp'` (a warning in the test run) | In review, #23 |
 
 **Stable point:** 1.1.0 on PyPI, from `main`, with nothing else open.
 
