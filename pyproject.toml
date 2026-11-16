@@ -40,6 +40,7 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
     "ga4gh.gkm==0.4.0; python_version >= '3.11'",
+    "pytest-xdist>=3.8.0",
 ]
 
 [build-system]
