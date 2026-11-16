@@ -88,8 +88,7 @@ of the type; the copy holds the bare id there, and a non-pointer stops the build
 a `json` block has its pointers checked against their targets (the build's round-trip check, below).
 
 `ordinal` (derivation kind; BIGINT, nulls never, no path): the record's position in its bundle section, 0 for the
-section's first record line, in the order the build staged the section (the full's order, then any replayed
-records). It is derived from the bundle (ADR 0001).
+section's first record line, in the bundle's order. It is derived from the bundle (ADR 0001).
 
 `json` (a table's JSON layout, ADR 0005): how a row is written back as its bundle record, byte for byte. The key
 column is the record's `id` property when `record_id` (the record has none otherwise); each other column is the

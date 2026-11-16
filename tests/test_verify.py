@@ -6,7 +6,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from _build_helpers import KV, make_con, make_spec, passthrough_spec, passthrough_sql, render
-from _fixture import FIXTURE, SOURCE_RELEASE
+from _fixture import FIXTURE
 
 from clinvar_gkm_parquet import build as build_mod
 from clinvar_gkm_parquet import verify as verify_mod
@@ -222,10 +222,6 @@ def _vargs(d, **kw):
         dir=Path(d),
         bundle_recompute=False,
         full=None,
-        delta=[],
-        manifest=[],
-        index=None,
-        full_source_release=None,
         sha256=None,
         against=None,
         report=None,
@@ -283,9 +279,7 @@ def test_command_bundle_recompute(tmp_path, monkeypatch):
     monkeypatch.setattr(build_mod, "render_table", passthrough_sql)
     monkeypatch.setattr(verify_mod, "load_spec", lambda v: spec)
     out = tmp_path / "out"
-    build_mod.build(
-        BuildInputs(full=resolve_input(str(FIXTURE)), full_source_release=SOURCE_RELEASE), out, spec=spec
-    )
+    build_mod.build(BuildInputs(full=resolve_input(str(FIXTURE))), out, spec=spec)
     con = duckdb.connect()
     kv = {k[len(KV_PREFIX) :]: v for k, v in _file_kv(con, out / "gene.parquet").items()}
     _rewrite(con, out / "gene.parquet", "SELECT * FROM src UNION ALL SELECT 'synthetic:extra', '{}'", kv=kv)
@@ -294,7 +288,6 @@ def test_command_bundle_recompute(tmp_path, monkeypatch):
         out,
         bundle_recompute=True,
         full=str(FIXTURE),
-        full_source_release=SOURCE_RELEASE,
         report=report,
         work_dir=tmp_path / "w",
     )

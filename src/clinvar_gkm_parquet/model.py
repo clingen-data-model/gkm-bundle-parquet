@@ -1,58 +1,41 @@
-"""Data passed between the stages: inputs, streamed and staged bundles, delta manifests, build results.
+"""Data passed between the stages: inputs, streamed and staged bundles, build results.
 
 Stage interfaces (each module owns its half):
 
-- sources.py  resolves a path or URL (or `--release`) into InputFile / BuildInputs, finds the expected sha256
-              (explicit, `.sha256` sidecar, line index, frozen-line MANIFEST.json), opens byte streams, and
-              reads the line index and delta manifests.
+- sources.py  resolves a path or URL into an InputFile and finds its expected sha256 (explicit, or the
+              `<file>.sha256` sidecar); transport.py opens byte streams.
 - bundle.py   streams one bundle once: hashes the compressed bytes, reads the version, classifies every line
               (design plan §4.2) and hands each record to a sink -> StreamedBundle.
-- replay.py   checks a delta chain, reads the (small) deltas into memory and folds them into one net change map
-              per section (design plan §4.3), which the build applies while the full streams past.
-- build.py    the section pipeline (design plan §6.2): streams the full once, applies the change map, stages
-              only the current section as chunk files, and hands each closed section to a worker thread that
-              loads it into DuckDB as `bundle_<section>(key VARCHAR, record VARCHAR)`, runs the SQL of every table
-              that reads it (sqltemplate.py renders it from the spec), writes `<table>.parquet` with the spec's
-              writer settings and key-value metadata, and drops it. Then the manifest.
-- verify.py   checks a built directory against the spec, the bundle (recompute, on the same pipeline) or a
-              reference set (oracle).
+- build.py    the section pipeline (design plan §6.2): streams the bundle once, stages only the current section
+              as chunk files, and hands each closed section to a worker thread that loads it into DuckDB as
+              `bundle_<section>(key VARCHAR, record VARCHAR)`, runs the SQL of every table that reads it
+              (sqltemplate.py renders it from the spec), writes `<table>.parquet` with the spec's writer settings
+              and key-value metadata, and drops it. Then the manifest.
+- verify.py   checks a built directory against the spec and the bundle (recompute, on the same pipeline).
 
 Staging format: gzip text, one record per line, `<key as JSON string>\\t<record>\\n`. `<record>` is the exact
 bytes from the bundle line (the trailing `,` removed), so `data` equals the bundle record byte for byte. JSON
 text never holds a raw tab or newline, so the split is unambiguous. The build writes a section as chunk files
-(`<section>.<nnnn>.tsv.gz`) holding the section's final state: the full's records in bundle order, less the keys
-the deltas replace or delete, then the deltas' net upserts; each of its lines starts with `<ordinal>\\t`, the
-record's 0-based position in that state (the `ordinal` derivation kind). `stage_bundle` writes one file per
-section, without the ordinal.
+(`<section>.<nnnn>.tsv.gz`) holding the section's records in bundle order; each of its lines starts with
+`<ordinal>\\t`, the record's 0-based position in the section (the `ordinal` derivation kind). `stage_bundle` writes
+one file per section, without the ordinal.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 
 @dataclass(frozen=True)
 class InputFile:
-    """One input bundle (or manifest) as resolved before reading."""
+    """One input bundle as resolved before reading."""
 
-    source: str  # local path or URL, as resolved
-    name: str  # the file name (an alias is resolved to the dated file it names)
-    release: str | None  # YYYY-MM-DD the file represents (a monthly's source_release; a weekly/delta's release)
-    expected_sha256: str | None  # hex, or None when no checksum source exists
-    sha256_source: str | None  # "explicit" | "sidecar" | "index" | "frozen-manifest" | None
+    source: str  # local path or URL
+    name: str  # the file name
+    expected_sha256: str | None  # hex, or None when no checksum was given and there is no sidecar
+    sha256_source: str | None  # "explicit" | "sidecar" | "selection" | None
     size: int | None = None
-
-
-@dataclass(frozen=True)
-class DeltaManifest:
-    """A weekly delta's manifest."""
-
-    release: str  # YYYY-MM-DD of this delta
-    baseline_release: str | None  # the release this delta applies on top of (null only on the first release)
-    deleted: dict[str, tuple[str, ...]]  # section -> keys deleted in this delta
-    checkpoint_full: dict | None  # as published; the official monthly that precedes the delta
-    raw: dict = field(repr=False, default_factory=dict)  # the manifest as read, for provenance
 
 
 @dataclass(frozen=True)
@@ -68,30 +51,6 @@ class StreamedBundle:
     text_size: int | None = None  # uncompressed bytes, likewise
     layout: str = "line"  # the reader the file took: line | json (bundle.py)
     root: tuple[str, ...] = ()  # the root's members, in the order of the text
-
-
-@dataclass(frozen=True)
-class DeltaBundle:
-    """A delta bundle read into memory (deltas are small: a weekly delta is about 10 MB gzip)."""
-
-    streamed: StreamedBundle
-    sections: dict[str, list[tuple[bytes, bytes]]]  # section -> [(key as JSON bytes, record bytes)], file order
-
-    @property
-    def input(self) -> InputFile:
-        return self.streamed.input
-
-    @property
-    def sha256(self) -> str:
-        return self.streamed.sha256
-
-    @property
-    def size(self) -> int:
-        return self.streamed.size
-
-    @property
-    def schema_version(self) -> str:
-        return self.streamed.schema_version
 
 
 @dataclass(frozen=True)
@@ -125,11 +84,9 @@ class SectionChunks:
 
 @dataclass(frozen=True)
 class BuildInputs:
-    """What a build reads: one full, then zero or more deltas (oldest first) with their manifests."""
+    """What a build reads: one bundle."""
 
     full: InputFile
-    full_source_release: str | None  # the release the full represents (needed to start a delta chain)
-    deltas: tuple[tuple[InputFile, InputFile], ...] = ()  # (delta bundle, its manifest)
 
 
 @dataclass(frozen=True)
@@ -144,6 +101,5 @@ class TableResult:
 @dataclass(frozen=True)
 class BuildResult:
     out_dir: Path
-    source_release: str | None
     tables: tuple[TableResult, ...]
     manifest_path: Path

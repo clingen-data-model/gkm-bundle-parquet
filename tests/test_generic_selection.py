@@ -96,23 +96,6 @@ def test_build_driver_takes_the_pairing(tmp_path, capsys):
     assert rc == 0, stdout + err
 
 
-def test_a_pairing_with_a_delta_is_refused(tmp_path, capsys):
-    rc, _, err = cli(
-        capsys,
-        "select",
-        "--full",
-        FIXTURE,
-        *CLINVAR_PAIRING,
-        "--delta",
-        FIXTURE,
-        "--driver",
-        "gene",
-        "--out",
-        tmp_path / "s.json.gz",
-    )
-    assert rc == 2 and "--bundle-schema and --column-set read one bundle: not with --delta" in err
-
-
 # --- CIViC: no version, pretty-printed, empty collections, root values -------------------------------------------
 
 

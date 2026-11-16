@@ -1,6 +1,6 @@
 """The CLI end to end on the real 1.1.0 excerpt: `--spec` (the sections default, baseline, clinvar-gkm, a custom
 file), selective builds (`--driver` with `--where`, `--ids`, `--ids-file`, the follow modes, `--max-depth`,
-`--sections`, deltas), the `select` command, and `verify` of each result (the directory check, the bundle
+`--sections`), the `select` command, and `verify` of each result (the directory check, the bundle
 recompute, a subset against its mini-bundle, the oracle's refusals).
 
 Expectations come from the bundle records parsed here with stdlib json, independently of the tool; the follow and
@@ -17,16 +17,14 @@ from pathlib import Path
 import duckdb
 import pytest
 import yaml
-from _fixture import FIXTURE, SECTIONS, SOURCE_RELEASE
-from _input_helpers import D1, D2, bundle_bytes, fixture_sections, local_input, two_synthetic_deltas, write_gz
+from _fixture import FIXTURE, SECTIONS
+from _input_helpers import local_input
 
 from clinvar_gkm_parquet import select as sel
 from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.model import BuildInputs
-from clinvar_gkm_parquet.replay import ReplayedSource, load_chain
 from clinvar_gkm_parquet.spec import builtin_dir, resolve_spec
 
-FULL = ["--full", FIXTURE, "--full-source-release", SOURCE_RELEASE]
+FULL = ["--full", FIXTURE]
 FIXTURE_SHA = (FIXTURE.parent / (FIXTURE.name + ".sha256")).read_text().split()[0]
 SOMATIC_VCV = "VCV004530381.1-S-SCI-CP-T1"  # ADR 0004's measured example: `out` reaches 14 records
 
@@ -233,8 +231,7 @@ def test_driver_where_on_baseline_follow_in(tmp_path, capsys):
     assert params["seeds"] == {"submitter": {"count": 1, "sha256": sel.ids_sha256([omim])}}
     assert params["selected_records"] == len(want)
     # the source keys still name the published input
-    assert meta["source_bundle_sha256"] == FIXTURE_SHA and meta["source_release"] == SOURCE_RELEASE
-    assert meta["source_deltas"] == "[]"
+    assert meta["source_bundle_sha256"] == FIXTURE_SHA
     m = json.loads((out / "manifest.json").read_text())
     assert m["selection"] == params and m["inputs"]["full"]["sha256"] == FIXTURE_SHA
     assert sum(m["sections"].values()) == len(want)  # what the tables were built from: the mini-bundle
@@ -252,8 +249,6 @@ def test_driver_where_on_baseline_follow_in(tmp_path, capsys):
     # recompute against anything but the mini-bundle is refused
     rc, _, err = cli(capsys, "verify", out, "--bundle-recompute", *FULL)
     assert rc == 2 and "is not the mini-bundle these files were built from" in err
-    rc, _, err = cli(capsys, "verify", out, "--bundle-recompute", "--full", mini, "--delta", "x.json.gz")
-    assert rc == 2 and "recompute against the mini-bundle alone" in err
     # the oracle refuses a subset
     rc, _, err = cli(capsys, "verify", out, "--against", out)
     assert rc == 2 and "is a selection" in err
@@ -368,120 +363,6 @@ def test_follow_modes_depth_and_sections(tmp_path, capsys, follow, depth):
     assert (params["follow"], params["max_depth"]) == (follow, depth)
     rc = cli(capsys, "verify", out, "--bundle-recompute", "--full", engine.path, "--work-dir", tmp_path / "w")[0]
     assert rc == 0
-
-
-# --- deltas ----------------------------------------------------------------------------------------------------
-
-
-def _replayed_sections(deltas) -> dict[str, list[tuple[bytes, bytes]]]:
-    """The full plus the deltas, replayed here by hand (design plan §4.3): per key, the latest delta wins; a
-    delta's deletes apply before its upserts; the untouched full records keep their order, and the upserts follow
-    in the order the deltas first touch each key."""
-    state = fixture_sections()
-    touched: dict[str, dict[str, tuple[bytes, bytes] | None]] = {}
-    for d_inp, m_inp in deltas:
-        man = json.loads(Path(m_inp.source).read_text())
-        for section, entry in man["sections"].items():
-            for k in entry["deleted"]:
-                touched.setdefault(section, {})[k] = None
-        for section, recs in parse_bundle(Path(d_inp.source)).items():
-            for k, r in recs:
-                touched.setdefault(section, {})[k] = (json.dumps(k).encode(), r.encode())
-    out = {}
-    for s in SECTIONS:
-        t = touched.get(s, {})
-        recs = [(k, r) for k, r in state.get(s, []) if json.loads(k) not in t]
-        recs += [v for v in t.values() if v is not None]
-        if recs:
-            out[s] = recs
-    return out
-
-
-def test_replayed_selection_equals_selection_on_the_replayed_bundle(tmp_path):
-    """A selection cut from a full plus deltas (replay.ReplayedSource) is byte for byte the selection cut from
-    the replayed state written out as a bundle."""
-    deltas = two_synthetic_deltas(tmp_path, SOURCE_RELEASE)
-    replayed = _replayed_sections(deltas)
-    materialized = write_gz(tmp_path / "replayed.json.gz", bundle_bytes(replayed))
-    inputs = BuildInputs(
-        full=local_input(FIXTURE, sha=FIXTURE_SHA), full_source_release=SOURCE_RELEASE, deltas=tuple(deltas)
-    )
-    s = fixture_sections()
-    gene0, rcv0 = json.loads(s["gene"][0][0]), json.loads(s["rcv"][0][0])
-    cases = [
-        ({"gene": [gene0]}, {"follow": "in", "max_depth": 2}),
-        ({"rcv": [rcv0]}, {"follow": "out"}),
-        ({"rcv": [rcv0], "gene": [gene0]}, {"follow": "both", "max_depth": 2}),
-    ]
-    for i, (seeds, kw) in enumerate(cases):
-        a = sel.select(ReplayedSource(inputs.full, load_chain(inputs)), seeds, tmp_path / f"a{i}.json.gz", **kw)
-        b = sel.select(local_input(materialized), seeds, tmp_path / f"b{i}.json.gz", **kw)
-        assert a.path.read_bytes() == b.path.read_bytes(), (seeds, kw)
-        assert a.source_sha256 == FIXTURE_SHA and a.source_records == b.source_records
-    # the replaced records are the deltas' versions; the deleted scv and the added-then-deleted gene are gone
-    got = parse_bundle(tmp_path / "a2.json.gz")
-    assert dict(got["gene"])[gene0] == s["gene"][1][1].decode()
-    assert dict(got["rcv"])[rcv0] == s["rcv"][1][1].decode()
-    assert "synthetic:gene-new" not in {k for k, _ in got["gene"]}
-
-
-def test_build_with_deltas_and_a_driver(tmp_path, capsys):
-    deltas = two_synthetic_deltas(tmp_path, SOURCE_RELEASE)
-    s = fixture_sections()
-    rcv0 = json.loads(s["rcv"][0][0])
-    delta_args = [a for d, _ in deltas for a in ("--delta", d.source)]
-    # baseline: the synthetic deltas move records between keys, which the typed specs refuse (record id != key)
-    opts = ["--spec", "baseline", "--driver", "rcv", "--where", f"id = '{rcv0}'", "--follow", "out"]
-    out = tmp_path / "out"
-    rc, stdout, _ = cli(capsys, "build", *FULL, *delta_args, "--out", out, *opts)
-    assert rc == 0 and f"source release {D2}" in stdout
-    data = dict(
-        duckdb.connect()
-        .execute(f"SELECT id, CAST(data AS VARCHAR) FROM read_parquet('{out / 'rcv.parquet'}')")
-        .fetchall()
-    )
-    assert data[rcv0] == s["rcv"][1][1].decode()  # D2's version of the driver record
-    meta = kv(out / "rcv.parquet")
-    assert json.loads(meta["source_deltas"]) == [
-        {"release": D1, "sha256": sha(deltas[0][0].source)},
-        {"release": D2, "sha256": sha(deltas[1][0].source)},
-    ]
-    assert meta["source_bundle_sha256"] == FIXTURE_SHA and meta["source_release"] == D2
-    m = json.loads((out / "manifest.json").read_text())
-    assert [d["release"] for d in m["inputs"]["deltas"]] == [D1, D2] and m["selection"] == json.loads(
-        meta["selection"]
-    )
-    mini = tmp_path / "mini.json.gz"
-    assert cli(capsys, "select", *FULL, *delta_args, "--out", mini, *opts)[0] == 0
-    assert sha(mini) == json.loads(meta["selection"])["selected_sha256"]
-    assert cli(capsys, "verify", out)[0] == 0
-    rc = cli(capsys, "verify", out, "--bundle-recompute", "--full", mini, "--work-dir", tmp_path / "w")[0]
-    assert rc == 0
-    # --where sees the replayed state: D1 gave gene 0 gene 1's record, so both now match gene 1's id
-    (g0, _), (g1, gr1) = s["gene"][:2]
-    where = f"data->>'$.id' = '{json.loads(gr1)['id']}'"
-    for extra, want in (([], {json.loads(g1)}), (delta_args, {json.loads(g0), json.loads(g1)})):
-        o = tmp_path / f"genes-{len(extra)}"
-        assert (
-            cli(
-                capsys,
-                "build",
-                *FULL,
-                *extra,
-                "--out",
-                o,
-                "--spec",
-                "baseline",
-                "--driver",
-                "gene",
-                "--where",
-                where,
-                "--max-depth",
-                0,
-            )[0]
-            == 0
-        )
-        assert set(ids(o / "gene.parquet")) == want
 
 
 # --- failures --------------------------------------------------------------------------------------------------

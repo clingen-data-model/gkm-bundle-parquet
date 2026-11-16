@@ -19,8 +19,8 @@ from _build_helpers import (
 )
 from _build_helpers import passthrough_spec as _passthrough_spec
 from _build_helpers import passthrough_sql as _passthrough_sql
-from _fixture import COUNTS, FIXTURE, SECTIONS, SOURCE_RELEASE
-from _input_helpers import D1, D2, bundle_bytes, fixture_sections, local_input, two_synthetic_deltas, write_gz
+from _fixture import COUNTS, FIXTURE, SECTIONS
+from _input_helpers import bundle_bytes, fixture_sections, local_input, write_gz
 
 from clinvar_gkm_parquet import build as build_mod
 from clinvar_gkm_parquet.build import (
@@ -30,7 +30,6 @@ from clinvar_gkm_parquet.build import (
     build_order,
     build_tables,
     kv_metadata,
-    manifest_source_for,
     resolve_build_inputs,
     run_build_command,
 )
@@ -45,12 +44,6 @@ def _sha(p: Path) -> str:
 def _kv(con, path):
     rows = con.execute(f"SELECT key, value FROM parquet_kv_metadata('{path}')").fetchall()
     return {k.decode(): v.decode() for k, v in rows}
-
-
-def _inp(name, release):
-    return InputFile(
-        source=f"/x/{name}", name=name, release=release, expected_sha256=None, sha256_source=None, size=10
-    )
 
 
 # --- the table stage -------------------------------------------------------------------------------------------
@@ -241,28 +234,17 @@ def test_determinism_across_runs_and_threads(tmp_path):
     assert duckdb.__version__ == "1.5.4"
 
 
-def test_kv_metadata_has_no_timestamp_and_deltas_json():
-    kv = kv_metadata(
-        table_spec_version="1.0",
-        bundle_schema_version="1.1.0",
-        source_bundle_sha256="f" * 64,
-        source_deltas=[
-            {"release": "2026-10-04", "sha256": "a" * 64},
-            {"release": "2026-10-11", "sha256": "b" * 64},
-        ],
-        source_release="2026-10-11",
-    )
+def test_kv_metadata_has_no_timestamp_and_no_release():
+    """source_deltas and source_release stay in every file (a 1.x reader expects them) but name nothing: the
+    tool reads one bundle and doesn't know which release it is."""
+    kv = kv_metadata(table_spec_version="1.0", bundle_schema_version="1.1.0", source_bundle_sha256="f" * 64)
     assert set(kv) == set(KV_KEYS) - {"table"}
-    assert json.loads(kv["source_deltas"]) == [
-        {"release": "2026-10-04", "sha256": "a" * 64},
-        {"release": "2026-10-11", "sha256": "b" * 64},
-    ]
-    assert kv["source_deltas"].startswith('[{"release":"2026-10-04","sha256":')
+    assert (kv["source_deltas"], kv["source_release"]) == ("[]", "")
 
 
 # --- the whole build: the section pipeline on the real fixture -------------------------------------------------
 #
-# A pass-through spec (one table per bundle section: id = key, data = record) exercises the real reader, replay,
+# A pass-through spec (one table per bundle section: id = key, data = record) exercises the real reader,
 # pipeline, build and manifest on a real bundle without depending on the table SQL (tests/test_tables*.py).
 
 
@@ -278,21 +260,16 @@ def passthrough(monkeypatch):
     return _passthrough_spec()
 
 
-def _fixture_inputs(deltas=(), full: InputFile | None = None) -> BuildInputs:
+def _fixture_inputs(full: InputFile | None = None) -> BuildInputs:
     sha = (FIXTURE.parent / (FIXTURE.name + ".sha256")).read_text().split()[0]
     inp = full or InputFile(
         source=str(FIXTURE),
         name=FIXTURE.name,
-        release="2026-10-18",
         expected_sha256=sha,
         sha256_source="sidecar",
         size=FIXTURE.stat().st_size,
     )
-    return BuildInputs(full=inp, full_source_release=SOURCE_RELEASE, deltas=tuple(deltas))
-
-
-def _two_deltas(tmp_path):
-    return two_synthetic_deltas(tmp_path, SOURCE_RELEASE)
+    return BuildInputs(full=inp)
 
 
 def _stage_dirs(work: Path) -> dict[str, int]:
@@ -305,12 +282,10 @@ def _stage_dirs(work: Path) -> dict[str, int]:
     return out
 
 
-def test_build_end_to_end_with_deltas(passthrough, tmp_path):
+def test_build_end_to_end(passthrough, tmp_path):
     spec = passthrough
-    deltas = _two_deltas(tmp_path)
     out = tmp_path / "out"
-    res = build(_fixture_inputs(deltas), out, spec=spec, threads=2, memory_limit="1GB")
-    assert res.source_release == D2
+    res = build(_fixture_inputs(), out, spec=spec, threads=2, memory_limit="1GB")
     assert [t.table for t in res.tables] == list(SECTIONS)  # spec order
     assert sorted(p.name for p in out.iterdir()) == sorted([f"{s}.parquet" for s in SECTIONS] + ["manifest.json"])
     assert not (tmp_path / "out.work").exists()  # the work dir (a sibling, created by the build) is gone
@@ -318,32 +293,26 @@ def test_build_end_to_end_with_deltas(passthrough, tmp_path):
     kv = _kv(con, out / "gene.parquet")
     full_sha = _fixture_inputs().full.expected_sha256
     assert kv[KV_PREFIX + "source_bundle_sha256"] == full_sha
-    assert kv[KV_PREFIX + "source_release"] == D2
+    assert (kv[KV_PREFIX + "source_release"], kv[KV_PREFIX + "source_deltas"]) == ("", "[]")
     assert kv[KV_PREFIX + "table_spec_version"] == "9.9"
-    assert json.loads(kv[KV_PREFIX + "source_deltas"]) == [
-        {"release": D1, "sha256": _sha(Path(deltas[0][0].source))},
-        {"release": D2, "sha256": _sha(Path(deltas[1][0].source))},
-    ]
     gene = dict(con.execute(f"SELECT id, data FROM read_parquet('{out / 'gene.parquet'}')").fetchall())
     s = fixture_sections()
-    assert gene[json.loads(s["gene"][0][0])] == s["gene"][1][1].decode()  # updated by D1
-    assert "synthetic:gene-new" not in gene  # added by D1, deleted by D2
+    assert gene[json.loads(s["gene"][0][0])] == s["gene"][0][1].decode()
     assert len(gene) == COUNTS["gene"]
     m = json.loads((out / "manifest.json").read_text())
     assert m["label"] == "derived from the bundle; may be regenerated" and m["derived"] is True
-    assert m["source_release"] == m["release"] == D2
+    assert m["source_release"] is None and m["release"] is None  # the producer's to fill
     assert m["build_date"] == m["ended_at"][:10]
     assert m["schema_version"] == m["bundle_schema_version"] == "1.1.0"
-    assert m["sections"] == {s: COUNTS.get(s, 0) - (s == "scv") for s in sorted(SECTIONS)}
+    assert m["sections"] == {s: COUNTS.get(s, 0) for s in sorted(SECTIONS)}
     assert m["tables"]["gene"] == {
         "file": "gene.parquet",
         "rows": COUNTS["gene"],
         "sha256": _sha(out / "gene.parquet"),
         "size": (out / "gene.parquet").stat().st_size,
     }
-    assert m["inputs"]["full"]["sha256"] == full_sha and m["inputs"]["full"]["source_release"] == SOURCE_RELEASE
-    assert [d["release"] for d in m["inputs"]["deltas"]] == [D1, D2]
-    assert m["inputs"]["deltas"][0]["bundle"]["sha256"] == _sha(Path(deltas[0][0].source))
+    assert m["inputs"]["full"]["sha256"] == full_sha and list(m["inputs"]) == ["full"]
+    assert "source_deltas" not in m and "release" not in m["inputs"]["full"]
     for k in ("generated_at", "started_at", "tool_version", "duckdb_version", "note"):
         assert m[k]
     # the fields ClinVar-GKM's r2_layout.build_index reads (its own parquet-manifest shape)
@@ -526,31 +495,12 @@ def test_build_refuses_sections_out_of_order(passthrough, tmp_path):
         build(_fixture_inputs(full=local_input(path)), tmp_path / "out", spec=passthrough)
 
 
-def test_build_source_release_without_deltas(passthrough, tmp_path):
-    res = build(_fixture_inputs(), tmp_path / "out", spec=passthrough, tables=["gene"])
-    assert res.source_release == SOURCE_RELEASE
-    assert _kv(duckdb.connect(), tmp_path / "out" / "gene.parquet")[KV_PREFIX + "source_deltas"] == "[]"
-
-
 # --- CLI mapping -----------------------------------------------------------------------------------------------
-
-
-def test_manifest_source_for():
-    assert manifest_source_for("https://h/x/clinvar-gkm-delta_2026-1011.json.gz") == (
-        "https://h/x/clinvar-gkm-delta_2026-1011.manifest.json"
-    )
-    with pytest.raises(InputError):
-        manifest_source_for("delta.bin")
 
 
 def _args(**kw):
     base = dict(
         full=None,
-        release=None,
-        delta=[],
-        manifest=[],
-        index=None,
-        full_source_release=None,
         sha256=None,
         out=Path("out"),
         tables=None,
@@ -563,55 +513,18 @@ def _args(**kw):
     return Namespace(**base)
 
 
-def test_resolve_build_inputs_full_and_deltas(monkeypatch):
+def test_resolve_build_inputs(monkeypatch):
     seen = []
 
-    def resolve_input(source, *, sha256=None, index=None):
-        seen.append((source, sha256, index))
-        return _inp(source.rsplit("/", 1)[-1], "2026-09-28" if "2026-10.json" in source else None)
+    def resolve_input(source, *, sha256=None):
+        seen.append((source, sha256))
+        return "FULL"
 
     monkeypatch.setattr(build_mod.sources, "resolve_input", resolve_input)
-    monkeypatch.setattr(build_mod.sources, "load_index", lambda src: {"index": src})
-    inputs = resolve_build_inputs(
-        _args(
-            full="f/clinvar-gkm_2026-10.json.gz",
-            sha256="ab",
-            delta=["d/clinvar-gkm-delta_2026-1004.json.gz"],
-            index="idx.json",
-        )
-    )
-    assert inputs.full_source_release == "2026-09-28"
-    assert seen[0] == ("f/clinvar-gkm_2026-10.json.gz", "ab", {"index": "idx.json"})
-    assert [s for s, _, _ in seen[1:]] == [
-        "d/clinvar-gkm-delta_2026-1004.json.gz",
-        "d/clinvar-gkm-delta_2026-1004.manifest.json",
-    ]
-    with pytest.raises(InputError, match="one per delta"):
-        resolve_build_inputs(_args(full="f", delta=["a.json.gz", "b.json.gz"], manifest=["m"]))
-    with pytest.raises(InputError, match="don't combine"):
-        resolve_build_inputs(_args(release="latest", delta=["a.json.gz"]))
-    with pytest.raises(InputError, match="don't combine"):
-        resolve_build_inputs(_args(release="latest", sha256="ab" * 32))
-
-
-def test_resolve_build_inputs_release(monkeypatch):
-    got = {}
-
-    def resolve_release(index, release, *, base_url):
-        got.update(index=index, release=release, base_url=base_url)
-        return "INPUTS"
-
-    monkeypatch.setattr(build_mod.sources, "load_index", lambda src: {"from": src})
-    monkeypatch.setattr(build_mod.sources, "resolve_release", resolve_release)
-    assert resolve_build_inputs(_args(release="latest")) == "INPUTS"
-    assert got == {
-        "index": {"from": build_mod.sources.DEFAULT_INDEX_URL},
-        "release": "latest",
-        "base_url": "https://data.clinvar-gkm.org",
-    }
-    monkeypatch.setattr(build_mod.sources, "load_index", lambda src: {"base_url": "https://mirror.example"})
-    resolve_build_inputs(_args(release="2026-10-18", index="idx.json"))
-    assert got["base_url"] == "https://mirror.example" and got["release"] == "2026-10-18"
+    assert resolve_build_inputs(_args(full="f/bundle.json.gz", sha256="ab")) == BuildInputs(full="FULL")
+    assert seen == [("f/bundle.json.gz", "ab")]
+    with pytest.raises(InputError, match="--full is required"):
+        resolve_build_inputs(_args())
 
 
 def test_run_build_command(monkeypatch, capsys, tmp_path):
@@ -621,7 +534,7 @@ def test_run_build_command(monkeypatch, capsys, tmp_path):
     assert rc == 0
     out = capsys.readouterr().out
     n = COUNTS["gene"] + COUNTS["submitter"] + COUNTS["allele"]
-    assert f"built 3 table(s) of spec sections 1.0, {n} rows, source release {SOURCE_RELEASE}" in out
+    assert f"built 3 table(s) of spec sections 1.0, {n} rows" in out
     kv = _kv(duckdb.connect(), tmp_path / "o" / "gene.parquet")
     assert kv[KV_PREFIX + "table_spec"] == "sections" and KV_PREFIX + "selection" not in kv
 
@@ -640,7 +553,7 @@ def test_build_api_defaults_to_sections(tmp_path):
 
 def test_build_and_verify_real_fixture(passthrough, tmp_path):
     """The pass-through build on the fixture is deterministic across threads; verify and the streaming bundle
-    recompute pass, with deltas too."""
+    recompute pass."""
     from clinvar_gkm_parquet.verify import bundle_recompute, recompute_failed, verify_dir
 
     spec = passthrough
@@ -652,18 +565,9 @@ def test_build_and_verify_real_fixture(passthrough, tmp_path):
     assert verify_dir(tmp_path / "a", spec) == []
     m = json.loads((tmp_path / "a" / "manifest.json").read_text())
     assert m["source_bundle_sha256"] == _fixture_inputs().full.expected_sha256
-    assert m["source_release"] == SOURCE_RELEASE and m["source_deltas"] == []
+    assert m["source_release"] is None and "source_deltas" not in m
     groups = bundle_recompute(tmp_path / "a", _fixture_inputs(), spec=spec, work_dir=tmp_path / "rc")
     assert len(groups) == len(SECTIONS) and not any(recompute_failed(g) for g in groups)
-    deltas = _two_deltas(tmp_path)
-    build(_fixture_inputs(deltas), tmp_path / "d", spec=spec)
-    groups = bundle_recompute(tmp_path / "d", _fixture_inputs(deltas), spec=spec, work_dir=tmp_path / "rc")
-    assert not any(recompute_failed(g) for g in groups)
-    # the full alone is not the replayed state: recompute finds the differences
-    groups = bundle_recompute(tmp_path / "d", _fixture_inputs(), spec=spec, work_dir=tmp_path / "rc")
-    by = {g["tables"][0]: g for g in groups}
-    assert by["gene"]["data_differs"]["count"] == 1 and by["scv"]["missing"]["count"] == 1
-    assert by["rcv"]["data_differs"]["count"] == 1
     assert not (tmp_path / "rc").exists() or not list((tmp_path / "rc").iterdir())
 
 

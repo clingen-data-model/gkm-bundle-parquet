@@ -210,15 +210,11 @@ def test_a_pairing_flag_alone_is_refused(tmp_path, capsys):
     assert rc == 2 and "not both" in stderr
 
 
-def test_a_pairing_isnt_mixed_with_another_spec_or_a_delta(tmp_path, capsys):
+def test_a_pairing_isnt_mixed_with_another_spec(tmp_path, capsys):
     """A selection takes a pairing since 1.1.0 (tests/test_generic_selection.py)."""
     full = CIVIC_BUNDLES[0]
     rc, _, stderr = cli(capsys, "build", *PAIRING, "--spec", "baseline", "--full", full, "--out", tmp_path / "o")
     assert rc == 2 and "not with --spec baseline" in stderr
-    rc, _, stderr = cli(
-        capsys, "select", *PAIRING, "--delta", full, "--driver", "gene", "--full", full, "--out", tmp_path / "o"
-    )
-    assert rc == 2 and "not with --delta" in stderr
 
 
 def test_a_column_set_for_another_schema_is_refused(tmp_path, capsys):
@@ -430,7 +426,7 @@ def test_compile_spec_writes_what_a_build_uses(capsys):
 
 
 def test_build_api_with_no_spec_compiles_for_the_bundle(tmp_path):
-    result = build_mod.build(BuildInputs(full=local_input(FIXTURE), full_source_release=None), tmp_path / "out")
+    result = build_mod.build(BuildInputs(full=local_input(FIXTURE)), tmp_path / "out")
     assert len(result.tables) == len(SECTIONS)
     kv = kv_of(tmp_path / "out" / "gene.parquet")
     assert (kv["table_spec"], kv["table_spec_version"]) == ("sections", "1.0") and "table_spec_builtin" not in kv
@@ -591,7 +587,7 @@ def test_the_version_comes_from_the_first_lines_of_a_url_with_one_get_and_no_ran
         return Response(raw)
 
     monkeypatch.setattr(transport, "_urlopen", urlopen)
-    inp = InputFile("https://example.org/x.json.gz", "x.json.gz", None, None, None, None)
+    inp = InputFile("https://example.org/x.json.gz", "x.json.gz", None, None, None)
     assert peek_version(inp, "schema_version") == "1.1.0"
     assert len(requests) == 1 and "Range" not in requests[0]
 

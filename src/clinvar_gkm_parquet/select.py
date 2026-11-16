@@ -12,9 +12,8 @@ Integration API:
 
 - `source` is an InputFile (read with BundleFileSource) or any RecordSource. A RecordSource gives one stream of
   `(section, key, record)` per pass, in section order and key order; the same stream on every pass. A bundle
-  file is one (BundleFileSource); a replayed delta state is another (wrap a re-iterable producer with
-  IterRecordSource). Keys are the JSON-encoded key bytes exactly as on a bundle line (or a staging line), and
-  records are the record bytes exactly as on the line, without the trailing comma.
+  file is one (BundleFileSource). Keys are the JSON-encoded key bytes exactly as on a bundle line (or a staging
+  line), and records are the record bytes exactly as on the line, without the trailing comma.
 - `seeds` maps a section to its starting keys (decoded strings). Every seed must exist, or SelectionError lists
   the missing ones.
 - `follow`: "out" adds every record a selected record points to; "in" adds every record that points to a
@@ -91,7 +90,7 @@ from .compat import KV_PREFIX
 from .default_pairing import reader_rules
 from .errors import BundleFormatError, InputError, SchemaVersionError, ToolError
 from .model import InputFile
-from .sources import open_stream
+from .transport import open_stream
 
 log = logging.getLogger(__name__)
 
@@ -233,81 +232,6 @@ class RecordSource(Protocol):
     schema_version: str
 
     def open_pass(self, number: int) -> AbstractContextManager[RecordPass]: ...
-
-
-class IterRecordSource:
-    """A RecordSource over a re-iterable producer: `records(pass_number)` returns an iterable of
-    `(section, key JSON bytes, record bytes)`, each section's records together, in section order and key order,
-    and the same sequence every time. The input for a replayed state (base full plus deltas)."""
-
-    sha256 = None
-
-    def __init__(
-        self, name: str, schema_version: str, records: Callable[[int], Iterable[tuple[str, bytes, bytes]]]
-    ):
-        self.name = name
-        self.schema_version = schema_version
-        self._records = records
-
-    def open_pass(self, number: int) -> AbstractContextManager[RecordPass]:
-        return _IterPass(self, self._records(number))
-
-
-class _IterPass:
-    bytes_read = None
-
-    def __init__(self, src: IterRecordSource, records: Iterable[tuple[str, bytes, bytes]]):
-        self.schema_version = src.schema_version
-        self._name = src.name
-        self._it = iter(records)
-        self.head: tuple[str, bytes, bytes] | None = None
-
-    def __enter__(self) -> _IterPass:
-        return self
-
-    def __exit__(self, *exc) -> bool:
-        close = getattr(self._it, "close", None)
-        if close is not None:
-            close()
-        return False
-
-    def sections(self) -> Iterator[_IterSection]:
-        self.head = next(self._it, None)
-        seen: set[str] = set()
-        while self.head is not None:
-            name = self.head[0]
-            if name in seen:
-                raise BundleFormatError(
-                    f"{self._name}: section {name!r} appears twice (a record source gives each section's records "
-                    "together)"
-                )
-            seen.add(name)
-            sec = _IterSection(self, name)
-            yield sec
-            sec.skip()
-
-
-class _IterSection:
-    def __init__(self, p: _IterPass, name: str):
-        self._p = p
-        self.name = name
-        self.count = 0
-        self._done = False
-
-    def __iter__(self) -> Iterator[tuple[bytes, bytes]]:
-        p = self._p
-        while not self._done:
-            head = p.head
-            if head is None or head[0] != self.name:
-                self._done = True
-                return
-            self.count += 1
-            p.head = next(p._it, None)
-            yield head[1], head[2]
-
-    def skip(self) -> None:
-        for _ in self:
-            pass
 
 
 class Tap(io.RawIOBase):
@@ -1298,7 +1222,7 @@ def _validate(
 ) -> None:
     """Re-read the mini-bundle with stage_bundle: each staged section must hold exactly what was written, and the
     root values what the source held."""
-    inp = InputFile(str(path), name, None, sha, "explicit", size)
+    inp = InputFile(str(path), name, sha, "explicit", size)
     root_values: dict[str, bytes] = {}
     try:
         staged = stage_bundle(inp, work, rules, root_values=root_values)

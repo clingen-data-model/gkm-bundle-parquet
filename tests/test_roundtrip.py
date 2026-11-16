@@ -17,8 +17,8 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _fixture import FIXTURE, GOLDEN_SECTIONS_SPEC, SOURCE_RELEASE
-from _input_helpers import local_input, synthetic_delta
+from _fixture import FIXTURE, GOLDEN_SECTIONS_SPEC
+from _input_helpers import local_input
 from _tables_helpers import connect, read_fixture
 
 from clinvar_gkm_parquet import bundle
@@ -32,7 +32,7 @@ from clinvar_gkm_parquet.sqltemplate import render_generic
 
 SPEC, _ = resolve_spec("sections", "1.1.0")
 TEXT = gzip.decompress(FIXTURE.read_bytes())
-FULL = ["--full", FIXTURE, "--full-source-release", SOURCE_RELEASE]
+FULL = ["--full", FIXTURE]
 
 
 def cli(capsys, *args) -> tuple[int, str, str]:
@@ -225,16 +225,6 @@ def test_rebuild_refuses_a_selection(tmp_path, capsys):
     assert cli(capsys, "build", *FULL, "--driver", "submitter", "--max-depth", "0", "--out", out)[0] == 0
     assert not any("section_text_sha256" in kv_of(p) for p in out.glob("*.parquet"))
     with pytest.raises(RoundTripError, match="selective build"):
-        rebuild(out, tmp_path / "b.json")
-
-
-def test_rebuild_refuses_deltas(tmp_path, capsys):
-    scv0 = read_fixture()["scv"][0][0]
-    d, _ = synthetic_delta(tmp_path, "2026-10-25", SOURCE_RELEASE, {}, {"scv": [scv0]})
-    out = tmp_path / "replayed"
-    assert cli(capsys, "build", *FULL, "--delta", d.source, "--out", out)[0] == 0
-    assert not any("section_text_sha256" in kv_of(p) for p in out.glob("*.parquet"))
-    with pytest.raises(RoundTripError, match="deltas replayed"):
         rebuild(out, tmp_path / "b.json")
 
 

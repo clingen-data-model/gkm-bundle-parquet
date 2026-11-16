@@ -116,8 +116,6 @@ def test_build_tables_self_checks_pass(tmp_path):
         table_spec_version="1.0",
         bundle_schema_version="1.1.0",
         source_bundle_sha256="0" * 64,
-        source_deltas=[],
-        source_release=None,
         table_spec={"table_spec": "sections", "table_spec_version": "1.0"},
     )
     results = build.build_tables(con, SPEC, [t.name for t in SPEC.tables], tmp_path, kv)

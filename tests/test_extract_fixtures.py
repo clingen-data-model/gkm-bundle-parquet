@@ -130,7 +130,7 @@ def test_output_is_a_valid_bundle(tmp_path, source):
     path = tmp_path / NAME
     assert (tmp_path / (NAME + ".sha256")).read_text() == f"{_sha(path)}  {NAME}\n"
     assert prov["sha256"] == _sha(path)
-    inp = InputFile(str(path), NAME, "2026-10-18", _sha(path), "explicit", path.stat().st_size)
+    inp = InputFile(str(path), NAME, _sha(path), "explicit", path.stat().st_size)
     staged = stage_bundle(inp, tmp_path / "work", reader_rules())
     assert {s: sec.records for s, sec in staged.sections.items()} == prov["counts"]
     assert staged.schema_version == prov["schema_version"] == "1.1.0"

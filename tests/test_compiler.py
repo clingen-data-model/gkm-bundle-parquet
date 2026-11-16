@@ -16,7 +16,7 @@ from pathlib import Path
 import duckdb
 import pytest
 import yaml
-from _fixture import FIXTURE, GOLDEN_SECTIONS_SPEC, SECTIONS, SOURCE_RELEASE
+from _fixture import FIXTURE, GOLDEN_SECTIONS_SPEC, SECTIONS
 from _input_helpers import local_input
 
 from clinvar_gkm_parquet import build as build_mod
@@ -162,7 +162,7 @@ def test_descriptions_come_from_the_schema_and_transforms_from_the_rules():
 
 
 def _full(path: Path) -> BuildInputs:
-    return BuildInputs(full=local_input(path, release=SOURCE_RELEASE), full_source_release=SOURCE_RELEASE)
+    return BuildInputs(full=local_input(path))
 
 
 def _rows(directory: Path, table: Table, names: list[str]) -> list[tuple]:

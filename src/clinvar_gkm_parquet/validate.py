@@ -443,8 +443,7 @@ def _format(f: dict) -> str:
 def run_validate_command(args) -> int:
     from . import sources
 
-    index = sources.load_index(args.index) if args.index else None
-    inp = sources.resolve_input(args.bundle, sha256=args.sha256, index=index)
+    inp = sources.resolve_input(args.bundle, sha256=args.sha256)
     schema_for = _schema_resolver(args.bundle_schema)
     prop = version_property_for(args.version_property, args.bundle_schema, schema_for)
     failures_out = open(args.failures, "w", encoding="utf-8") if args.failures else None

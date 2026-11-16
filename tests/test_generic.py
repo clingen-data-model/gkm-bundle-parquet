@@ -23,7 +23,7 @@ from pathlib import Path
 import duckdb
 import pytest
 import yaml
-from _fixture import FIXTURE, SOURCE_RELEASE
+from _fixture import FIXTURE
 from _tables_helpers import SPEC, connect, read_fixture
 
 from clinvar_gkm_parquet import baseline, sqltemplate
@@ -32,7 +32,7 @@ from clinvar_gkm_parquet.errors import SpecError
 from clinvar_gkm_parquet.spec import parse_spec, resolve_spec
 
 CUSTOM = Path(__file__).parent / "fixtures" / "custom-spec" / "tables.yaml"
-FULL = ["--full", FIXTURE, "--full-source-release", SOURCE_RELEASE]
+FULL = ["--full", FIXTURE]
 
 # The clinvar-gkm 1.0 tables the generic renderer builds: no computed column, no row filter.
 GENERIC_BUILTIN = [
