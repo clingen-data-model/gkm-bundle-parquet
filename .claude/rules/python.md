@@ -21,12 +21,14 @@ reference; docs/validate.md) and `compat.py` (the source of `version --json`). U
 `tests/test_any_bundle.py` scans them all. **The generic core** (ADR 0006) also imports nothing outside itself, because it
 is meant to move to the GKM Toolkit:
 
-- `compiler.py` compiles a table spec from a schema set and its column set; `columnset.py` loads a column set
+- `compiler.py` compiles a table spec from a schema set and a column set, and generates a schema's default column set
+  (ADR 0007: `generate_default`, the policy version `RULES_VERSION`); `columnset.py` loads a column set
   (`docs/column-set-format.md`); `schemas.py` loads a schema set from a file, URL or directory; `bundle.py` holds the two
   readers behind the sink interface; `canonical.py` is a record's canonical form and the records sha256s
   (docs/round-trip.md); `transport.py` reads bytes from a path or URL; `model.py` and `errors.py`.
 
-**The tool around it:** `compiled.py` compiles a pairing (`compile_pairing`), writes `table-spec.json` beside a build's
+**The tool around it:** `compiled.py` compiles a pairing (`compile_pairing`: the default, or a named projection) or
+the generated default (`compile_default`), runs `generate`, writes `table-spec.json` beside a build's
 manifest and reads it back; `reader_rules` gives the bundle reader the spec's `root`.
 
 The package ships no schema set and no column set. The suite's ClinVar-GKM pairing is a test fixture,
@@ -61,8 +63,8 @@ The package ships no schema set and no column set. The suite's ClinVar-GKM pairi
   the `<file>.sha256` sidecar) when there is one. Refuse on a mismatch.
 - A file in another JSON layout is read whole, by the general reader: never read a large file that way. Layout is chosen per
   file (`bundle.sniff_layout`), not by the pairing.
-- A bundle is read only with its pairing; there is no default. The version property, if any, is the column set's (the
-  spec's `root`). Nothing in the package lists sections or versions: a bundle's collections come from its schema
+- A bundle is read only with its schema; there is no default bundle. With no column set the tables are the schema's
+  generated default. The version property, if any, is the column set's or `--version-property`'s (the spec's `root`). Nothing in the package lists sections or versions: a bundle's collections come from its schema
   (`compiler.root_parts`).
 
 ## Fail loudly

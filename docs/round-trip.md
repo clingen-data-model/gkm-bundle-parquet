@@ -60,8 +60,8 @@ JSON parser and sha256: load the bundle, canonicalize each record, and hash the 
   `records_sha256`) and, after writing each file, writes every row back as a record and checks that its record sha256 is
   its source record's. The first that differs stops the build, naming the table, the key and the first differing
   character of the two canonical forms.
-- **`rebuild`** writes the bundle in the line layout (one record per line, sections in the root's order, records in their
-  source order, keys in column order), hashes it as it goes, and checks each section against the file's
+- **`rebuild`** writes the bundle in the line layout (one record per line, sections in the root's order, records in key order
+  (a set tool 1.x built: their source order, by its `ordinal`), keys in column order), hashes it as it goes, and checks each section against the file's
   `section_records_sha256` and the whole against the manifest's `records_sha256`. A difference stops it, and no output is
   left. It prints the records sha256.
 - **`verify --roundtrip`** does the same without writing; with `--full <bundle>` it also hashes that bundle, from its own
