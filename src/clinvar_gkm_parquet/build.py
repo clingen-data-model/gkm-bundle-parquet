@@ -74,7 +74,11 @@ KV_ORDER = (
     "table_spec_sha256",
     "schema_set_sha256",
     "column_set_sha256",
+    "policy_version",
+    "column_set_kind",
+    "projection",
     "table",
+    "foreign_keys",
     "bundle_schema_version",
     "source_bundle_sha256",
     "source_deltas",
@@ -84,7 +88,7 @@ KV_ORDER = (
     "selection",
 )
 # Keys whose value differs from file to file of one build.
-KV_PER_FILE = ("table", "section_records_sha256")
+KV_PER_FILE = ("table", "foreign_keys", "section_records_sha256")
 EMPTY_SHA256 = canonical.EMPTY_SHA256  # the records sha256 of a section with no records
 DERIVED_LABEL = "derived from the bundle; may be regenerated"
 MANIFEST_NAME = "manifest.json"  # provisional (design plan §7.3)
@@ -457,6 +461,8 @@ def _copy_sql(spec: Spec, table: Table, sql: str, path: Path, kv: dict[str, str]
     except (KeyError, TypeError, ValueError) as e:
         raise SpecError("spec writer.row_group_size must be an integer") from e
     body = sql.strip().rstrip(";")
+    if table.foreign_keys is not None:  # ADR 0007 decision 2.3: each file names its foreign keys
+        kv = {**kv, "foreign_keys": json.dumps(list(table.foreign_keys), separators=(",", ":"))}
     return (
         f"COPY (SELECT * FROM (\n{body}\n) ORDER BY {sql_ident(table.sort_key)})\n"
         f"TO {sql_str(str(path))} (FORMAT parquet, COMPRESSION {compression}, "
@@ -921,6 +927,16 @@ def write_manifest(
                 if "schema_set_sha256" in kv
                 else {}
             ),
+            **(
+                {
+                    # ADR 0007 decision 2.5: the policy, and whether the set is the default or a named projection.
+                    "policy_version": kv["policy_version"],
+                    "column_set_kind": kv["column_set_kind"],
+                    "projection": kv.get("projection"),
+                }
+                if "column_set_kind" in kv
+                else {}
+            ),
         },
         "table_spec_version": kv["table_spec_version"],
         "table_spec_status": spec.status,
@@ -1212,17 +1228,28 @@ def _log(msg: str) -> None:
 
 
 PAIRING_REQUIRED = (
-    "--bundle-schema and --column-set are required: the bundle's schema (a file, a URL or a schema-set "
-    "directory) and the column set that pairs with it; the tool has no default bundle (ADR 0009)"
+    "--bundle-schema is required: the bundle's schema (a file, a URL or a schema-set directory); the tool has no "
+    "default bundle (ADR 0009). With no --column-set, the schema's default is built (ADR 0007)"
 )
 
 
 def resolve_pairing(args) -> tuple[Spec, SpecSource]:
-    """The sections spec compiled from `--bundle-schema` and `--column-set`, both required."""
+    """The sections spec of `--bundle-schema` (required) and `--column-set`: the generated default when no column
+    set is given (ADR 0007 decision 2.2), with `--version-property` naming the version, if any; else the column
+    set's compile, the default if it complies, or its named projection (compiled.compile_pairing)."""
     bundle_schema, column_set = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
-    if bundle_schema is None or column_set is None:
+    version_property = getattr(args, "version_property", None)
+    if bundle_schema is None:
         raise InputError(PAIRING_REQUIRED)
-    return compiled.compile_pairing(str(bundle_schema), str(column_set))
+    if column_set is None:
+        return compiled.compile_default(str(bundle_schema), version_property)
+    spec, source = compiled.compile_pairing(str(bundle_schema), str(column_set))
+    if version_property is not None and spec.root.version_property != version_property:
+        raise InputError(
+            f"--version-property {version_property} differs from the column set's version_property "
+            f"{spec.root.version_property}; the column set says it"
+        )
+    return spec, source
 
 
 def run_build_command(args) -> int:

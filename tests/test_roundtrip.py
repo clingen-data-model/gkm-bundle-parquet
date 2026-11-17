@@ -85,9 +85,8 @@ def copy(built, tmp_path) -> Path:
 def test_sections_spec_is_lossless():
     assert SPEC.lossless and lossless_problems(SPEC) == []
     for t in SPEC.tables:
-        assert (
-            t.json is not None and t.columns[-1].name == "ordinal" and t.columns[-1].derivation.kind == "ordinal"
-        )
+        # ADR 0008 decision 1.1: no ordinal column; the key is the first.
+        assert t.json is not None and t.columns[0].derivation.kind == "key" and not t.columns_of("ordinal")
         for c in t.columns_of("bare-id"):
             assert c.derivation.targets, (t.name, c.name)
             if len(c.derivation.targets) > 1:  # its section column follows it
@@ -115,7 +114,10 @@ def _raw_sections() -> dict:
             "the tables must read one section each, each section once (repeated: ['sequenceReference'])",
         ),
         (lambda r: r["tables"][0].pop("json"), "table sequenceReference: needs a json block"),
-        (lambda r: r["tables"][0]["columns"].pop(), "needs one ordinal column, as its last column"),
+        (
+            lambda r: r["tables"][0]["columns"].insert(0, r["tables"][0]["columns"].pop()),
+            "an ordinal column (tool 1.x) is one, the last column",
+        ),
         (lambda r: r["tables"][1]["columns"][-2]["derivation"].pop("targets"), "needs its target section(s)"),
         (lambda r: r["tables"][6]["columns"].pop(5), "needs a pointer-section column of the same path"),
         (
@@ -215,11 +217,12 @@ def test_reordered_keys_and_arrays_build_the_same_records(built, tmp_path, capsy
     assert sorted(k for k in got if other[k] != got[k]) == ["records_sha256", "submitter"]
 
 
-def test_ordinal_is_the_bundle_order(built):
+def test_rows_are_written_in_key_order(built):
+    """ADR 0008 decision 1.1: no record order is kept; the rows are in key order."""
     con = duckdb.connect()
     for section, records in read_fixture().items():
-        got = con.execute(f"SELECT id FROM read_parquet('{built / (section + '.parquet')}') ORDER BY ordinal")
-        assert [r[0] for r in got.fetchall()] == [k for k, _ in records], section
+        got = con.execute(f"SELECT id FROM read_parquet('{built / (section + '.parquet')}')")
+        assert [r[0] for r in got.fetchall()] == sorted(k for k, _ in records), section
 
 
 def test_verify_roundtrip(built, capsys):
@@ -270,12 +273,9 @@ def test_rebuild_refuses_a_missing_table(copy, tmp_path):
         rebuild(copy, tmp_path / "b.json")
 
 
-def test_rebuild_refuses_a_missing_ordinal(copy, tmp_path):
-    rewrite(
-        copy / "gene.parquet",
-        "SELECT * REPLACE (CASE WHEN ordinal = 3 THEN 99 ELSE ordinal END AS ordinal) FROM t",
-    )
-    with pytest.raises(RoundTripError, match=r"ordinals are not 0\.\.59"):
+def test_rebuild_refuses_a_repeated_key(copy, tmp_path):
+    rewrite(copy / "gene.parquet", "SELECT * FROM t UNION ALL (SELECT * FROM t LIMIT 1)")
+    with pytest.raises(RoundTripError, match="table gene: 61 rows but 60 distinct keys"):
         rebuild(copy, tmp_path / "b.json")
     assert not (tmp_path / "b.json").exists()
 
@@ -359,7 +359,7 @@ def _build_one(section: str, edit) -> list[dict]:
     k, r = sections[section][0]
     sections[section][0] = (k, edit(r))
     con = connect(sections)
-    cur = con.execute(f"SELECT * FROM ({render_generic(SPEC.table(section))}) ORDER BY ordinal")
+    cur = con.execute(f"SELECT * FROM ({render_generic(SPEC.table(section))}) ORDER BY id")
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row, strict=True)) for row in cur.fetchall()]
 
@@ -427,10 +427,13 @@ def test_empty_list_and_control_character_round_trip():
     raw = BASE["gene"][0][1]
     assert "iris" in json.loads(raw)["primaryCoding"] and "mappings" in json.loads(raw)
     rows = _build_one("gene", _obj(edit))
-    assert rows[0]["primaryCoding"]["iris"] == [] and rows[0]["name"].endswith("\x1f")
+    edited = next(r for r in rows if r["id"] == BASE["gene"][0][0])
+    assert edited["primaryCoding"]["iris"] == [] and edited["name"].endswith("\x1f")
     assert json.dumps("\x1f") == '"\\u001f"'
     other = [
-        r for r in rows[1:] if r["mappings"] is not None and not any(m["coding"]["iris"] for m in r["mappings"])
+        r
+        for r in rows
+        if r is not edited and r["mappings"] is not None and not any(m["coding"]["iris"] for m in r["mappings"])
     ]
     assert all(m["coding"]["iris"] is None for r in other for m in r["mappings"])
 

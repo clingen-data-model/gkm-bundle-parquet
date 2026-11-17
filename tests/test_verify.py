@@ -164,7 +164,8 @@ def test_command_usage_errors(built, tmp_path, spec_patched):
     assert verify_mod.run_verify_command(_vargs(tmp_path / "nope")) == 2
     assert verify_mod.run_verify_command(_vargs(out, bundle_recompute=True)) == 2
     assert verify_mod.run_verify_command(_vargs(out, full="x.json.gz")) == 2
-    assert verify_mod.run_verify_command(_vargs(out, bundle_schema="s.json")) == 2  # without --column-set
+    assert verify_mod.run_verify_command(_vargs(out, column_set="c.yaml")) == 2  # without --bundle-schema
+    assert main(["verify", str(out), "--bundle-schema", str(tmp_path / "s.json")]) == 2  # can't read it
     assert main(["verify", str(tmp_path / "nope")]) == 2
 
 

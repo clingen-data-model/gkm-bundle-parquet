@@ -31,15 +31,15 @@ def test_version_text(capsys):
     "argv",
     [
         ["build", "--full", "b.json.gz", "--out", "o"],
-        ["build", "--full", "b.json.gz", "--out", "o", "--bundle-schema", "s"],
         ["select", "--full", "b.json.gz", "--out", "o.json.gz", "--driver", "t", "--column-set", "c.yaml"],
         ["compile-spec"],
+        ["generate"],
     ],
 )
-def test_no_pairing_is_a_clear_error(capsys, argv):
+def test_no_schema_is_a_clear_error(capsys, argv):
     assert main(argv) == 2
     err = capsys.readouterr().err
-    assert "--bundle-schema and --column-set are required" in err and "no default bundle" in err
+    assert "--bundle-schema is required" in err and "no default bundle" in err
 
 
 def test_validate_needs_the_schema(capsys):

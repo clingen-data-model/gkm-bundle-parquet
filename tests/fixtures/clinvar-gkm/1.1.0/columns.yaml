@@ -13,6 +13,9 @@
 # doesn't resolve. The tool's 1.1.0 snapshot carries the corrected one (ADR 0006).
 schema: https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/clinvar-gkm-bundle.schema.json
 version_property: schema_version
+# A named projection (ADR 0008 decision 3): this set narrows the schema's generated default to what the producer
+# emits, so it doesn't equal the default.
+projection: clinvar-gkm-producer
 
 # `integer`: the producer writes these from BigQuery INT64 columns, never a Range (schemas/vrs_output_2_0_1.schema.json,
 # the gkm_vrs load schema). location.start and location.end are left to the schema: integer or Range, three columns;

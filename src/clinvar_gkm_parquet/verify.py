@@ -38,7 +38,7 @@ from .build import (
     table_groups,
 )
 from .bundle import ROOT_VALUES_TABLE
-from .compiled import compile_pairing, is_recorded, recorded_spec
+from .compiled import compile_default, compile_pairing, is_recorded, recorded_spec
 from .errors import InputError, SpecError
 from .model import BuildInputs
 from .spec import SPEC_KV_KEYS, Spec
@@ -102,10 +102,16 @@ def spec_for_dir(con: duckdb.DuckDBPyConnection, out_dir: Path) -> Spec:
     return recorded_spec(out_dir, kv)
 
 
-def pairing_problems(out_dir: Path, bundle_schema: str, column_set: str) -> list[str]:
+def pairing_problems(
+    out_dir: Path, bundle_schema: str, column_set: str | None, version_property: str | None = None
+) -> list[str]:
     """Whether a pairing compiles to the spec that wrote the files: its table_spec_sha256, schema_set_sha256 and
-    column_set_sha256 against the ones every file records. Empty: it does."""
-    _, source = compile_pairing(str(bundle_schema), str(column_set))
+    column_set_sha256 against the ones every file records. No column set: the schema's generated default. Empty: it
+    does."""
+    if column_set is None:
+        _, source = compile_default(str(bundle_schema), version_property)
+    else:
+        _, source = compile_pairing(str(bundle_schema), str(column_set))
     table_spec = {source.sha256}
     con = duckdb.connect()
     try:
@@ -121,7 +127,8 @@ def pairing_problems(out_dir: Path, bundle_schema: str, column_set: str) -> list
         recorded = sorted({kv.get(key) or "(none)" for kv in kvs.values()})
         if len(recorded) != 1 or recorded[0] not in got:
             out.append(
-                f"--bundle-schema and --column-set compile to {key} {' or '.join(sorted(got))}; the files record "
+                f"--bundle-schema{' and --column-set' if column_set else ''} compile to {key} "
+                f"{' or '.join(sorted(got))}; the files record "
                 f"{', '.join(recorded)}"
             )
     return out
@@ -523,8 +530,8 @@ def run_verify_command(args) -> int:
     if args.full and not (args.bundle_recompute or roundtrip):
         return _usage("--full is only read with --bundle-recompute or --roundtrip")
     pairing = getattr(args, "bundle_schema", None), getattr(args, "column_set", None)
-    if (pairing[0] is None) != (pairing[1] is None):
-        return _usage("--bundle-schema and --column-set go together: a schema and the column set it pairs with")
+    if pairing[0] is None and pairing[1] is not None:
+        return _usage("--column-set needs --bundle-schema: the schema it pairs with")
 
     meta = duckdb.connect()
     spec = spec_for_dir(meta, out_dir)
@@ -535,7 +542,7 @@ def run_verify_command(args) -> int:
     report = VerifyReport(dir=str(out_dir), spec_version=spec.spec_version, spec_name=spec.name, selection=params)
     report.spec_problems = verify_dir(out_dir, spec)
     if pairing[0] is not None:
-        report.spec_problems += pairing_problems(out_dir, *pairing)
+        report.spec_problems += pairing_problems(out_dir, *pairing, getattr(args, "version_property", None))
     if args.bundle_recompute:
         if params is None:
             inputs = resolve_build_inputs(args)

@@ -21,13 +21,17 @@ def _inputs(p: argparse.ArgumentParser) -> None:
 def _pairing(p: argparse.ArgumentParser, *, required: str = "required") -> None:
     p.add_argument(
         "--bundle-schema",
-        help=f"the bundle's schema: a file, a URL, or a directory holding a schema set ({required}, with "
-        "--column-set)",
+        help=f"the bundle's schema: a file, a URL, or a directory holding a schema set ({required})",
     )
     p.add_argument(
         "--column-set",
-        help=f"the column set that pairs with --bundle-schema: a file or URL (docs/column-set-format.md; "
-        f"{required})",
+        help="a column set that pairs with --bundle-schema: a file or URL (docs/column-set-format.md); it must "
+        "compile to the default or declare itself a projection. Default: the generated default (ADR 0007)",
+    )
+    p.add_argument(
+        "--version-property",
+        help="the root property holding the bundle's version, for the generated default (default: none, so the "
+        "version is a root value); with --column-set, the column set says it",
     )
 
 
@@ -112,8 +116,8 @@ def _parser() -> argparse.ArgumentParser:
         "verify",
         help="check a built directory (the directory check, bundle recompute, round trip)",
         description="Check a built directory against the spec the build wrote beside its manifest, which every "
-        "file's key-value metadata names by its sha256. Needs no schema; given --bundle-schema and --column-set, "
-        "also checks that they compile to that spec.",
+        "file's key-value metadata names by its sha256. Needs no schema; given --bundle-schema (and --column-set, "
+        "or else the schema's default), also checks that they compile to that spec.",
     )
     v.add_argument("dir", type=Path)
     v.add_argument("--bundle-recompute", action="store_true", help="id sets and data against the bundle")
@@ -136,6 +140,22 @@ def _parser() -> argparse.ArgumentParser:
 
     c = sub.add_parser("compile-spec", help="write the sections spec of a pairing as YAML, with no build")
     _pairing(c)
+
+    g = sub.add_parser(
+        "generate",
+        help="write a bundle schema's default column set, or check a column set against it",
+        description="Write the default column set of a bundle schema (ADR 0007): every collection, every property "
+        "its record schema allows. Reports on stderr every IRI position with no pointer pattern and every "
+        "JSON-text position, with the reason. With --check, say whether --column-set compiles to the default, "
+        "listing each difference (exit 1 if it differs).",
+    )
+    g.add_argument(
+        "--bundle-schema", help="the bundle's schema: a file, a URL, or a schema-set directory (required)"
+    )
+    g.add_argument("--version-property", help="the root property holding the bundle's version (default: none)")
+    g.add_argument("-o", "--out", type=Path, help="write the column set here (default: stdout)")
+    g.add_argument("--check", action="store_true", help="check --column-set against the default")
+    g.add_argument("--column-set", help="with --check: the column set to check")
 
     val = sub.add_parser(
         "validate",
@@ -175,7 +195,7 @@ def _parser() -> argparse.ArgumentParser:
 NEW_NAME = "gkm-bundle-parquet"
 NEW_REPOSITORY = "https://github.com/clingen-data-model/gkm-bundle-parquet"
 REMOVED_IN = "2.0.0"
-COMMANDS = ("build", "select", "rebuild", "verify", "compile-spec", "validate", "version")
+COMMANDS = ("build", "select", "rebuild", "verify", "compile-spec", "generate", "validate", "version")
 
 
 def _deprecated(message: str) -> None:
@@ -214,6 +234,12 @@ def _compile_spec(args: argparse.Namespace) -> int:
     _, source = resolve_pairing(args)
     sys.stdout.write(compiled_yaml(source))
     return 0
+
+
+def _generate(args: argparse.Namespace) -> int:
+    from .compiled import run_generate_command
+
+    return run_generate_command(args)
 
 
 def _build(args: argparse.Namespace) -> int:
@@ -256,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         "rebuild": _rebuild,
         "verify": _verify,
         "compile-spec": _compile_spec,
+        "generate": _generate,
         "validate": _validate,
         "version": _version,
     }[args.command]

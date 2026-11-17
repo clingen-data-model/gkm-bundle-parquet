@@ -50,22 +50,22 @@ def test_the_spec_is_compiled():
     assert SOURCE.schema_set_sha256 and SOURCE.column_set_sha256 and SPEC.root is not None
 
 
+def _property_columns(t) -> list:
+    """The columns that read a property: all but the key and `id_present`."""
+    return [c for c in t.columns if c.derivation.kind not in ("key", "id-present")]
+
+
 def test_spec_shape():
-    """One table per section, named as it; `id` (the key) first; no record column; known_fields; every other column
-    reads one top-level property; the generic renderer builds every table."""
+    """One table per section, named as it; `id` (the key) first, then `id_present` when the class doesn't require
+    an id; no record column and no ordinal (ADR 0008 decision 1.1); known_fields; every other column reads one
+    top-level property; the generic renderer builds every table."""
     assert [t.name for t in SPEC.tables] == list(SECTIONS)
     for t in SPEC.tables:
         assert t.sections == (t.name,) and t.row_filter is None and t.sort_key == "id" and t.known_fields
         assert (t.columns[0].name, t.columns[0].type, t.columns[0].derivation.kind) == ("id", "VARCHAR", "key")
         assert not t.columns_of("record")
-        last = t.columns[-1]  # the ordinal (ADR 0005), after the property columns
-        assert (last.name, last.type, last.nulls, last.derivation.kind) == (
-            "ordinal",
-            "BIGINT",
-            "never",
-            "ordinal",
-        )
-        for c in t.columns[1:-1]:
+        assert not t.columns_of("ordinal")
+        for c in _property_columns(t):
             assert re.fullmatch(r"\$\.\w+", c.derivation.path), (t.name, c.name)
             assert c.type == canonical_type(c.type), (t.name, c.name)  # as DESCRIBE prints it
             if c.derivation.kind == "pointer-section":  # a multi-target pointer's section, named after it
@@ -150,6 +150,15 @@ class _Checker:
             assert isinstance(v, list) and len(got) == len(v), where
             for i, (e, g) in enumerate(zip(v, got, strict=True)):
                 self.check(e, g, t.children[0][1], f"{where}[{i}]", depth)
+        elif t.id == "struct" and isinstance(v, str):
+            # A list element with derived parts (ADR 0007 decision 1.10): a pointer or an IRI is its bare id and
+            # section; any other string stays as written.
+            fields = dict(t.children)
+            assert set(fields) == {"id", "section"}, where
+            m = POINTER.match(v)
+            assert (got["id"], got["section"]) == ((v.split("/", 2)[2], v.split("/")[1]) if m else (v, None)), (
+                where
+            )
         elif t.id == "struct":
             if v is None:
                 assert got is None, where
@@ -194,11 +203,12 @@ def test_every_column_holds_the_bundle_value():
         records = _records(t.name)
         got = _table(con, t)
         assert [r["id"] for r in got] == sorted(records)
-        covered = {"id"} | {c.derivation.path[2:] for c in t.columns[1:-1]}
+        covered = {"id"} | {c.derivation.path[2:] for c in _property_columns(t)}
         for row in got:
             rec = records[row["id"]]
             assert set(rec) <= covered and rec.get("id", row["id"]) == row["id"]
-            for c in t.columns[1:-1]:
+            assert row.get("id_present", "id" in rec) == ("id" in rec)
+            for c in _property_columns(t):
                 kind, prop, where = c.derivation.kind, c.derivation.path[2:], f"{t.name} {row['id']} {c.name}"
                 v, value = rec.get(prop), row[c.name]
                 if kind in RANGE_KINDS:
@@ -428,11 +438,12 @@ def test_record_id_not_the_key_stops_the_build():
 
 
 def test_record_id_absent(tmp_path):
-    """A sections table states that its records carry their id (json.record_id), so one without it can't be written
-    back, and the round-trip check stops it."""
+    """ADR 0007: a class that allows an `id` but doesn't require it has `id_present`, so a record without its id
+    is written back without it."""
     sections, key = _mutated("variation", lambda k, r: "id" in r, lambda rec: rec.pop("id"))
-    with pytest.raises(RoundTripError, match=f"table variation: round trip: key {key}: .* differs"):
-        roundtrip_check(connect(sections), SPEC.table("variation"), tmp_path)
+    got = {r["id"]: r for r in _table(connect(sections), SPEC.table("variation"))}
+    assert got[key]["id_present"] is False and all(r["id_present"] for k, r in got.items() if k != key)
+    roundtrip_check(connect(sections), SPEC.table("variation"), tmp_path)
 
 
 def test_unknown_top_level_property_stops_the_build():

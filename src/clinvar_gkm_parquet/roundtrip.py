@@ -53,6 +53,7 @@ import duckdb
 from . import canonical
 from .bundle import ROOT_VALUES_TABLE
 from .canonical import EMPTY_SHA256, Hasher, failure
+from .compiler import encoding_parts, object_fields
 from .errors import BundleFormatError, RoundTripError, SpecError
 from .model import InputFile
 from .spec import RANGE_KINDS, Column, Spec, Table
@@ -106,14 +107,20 @@ class _Writer:
         members = ", ".join(f"{_lit(json.dumps(n, ensure_ascii=False) + ':')} || {v}" for n, v in parts)
         return f"'{{' || concat_ws(',', {members}) || '}}'"
 
-    def value(self, x: str, t, rel: str, c: Column, ptrs: dict[str, tuple[str, ...]]) -> str:
-        """JSON text of x, of DuckDB type t, at position rel of column c's value (NULL stays NULL)."""
+    def value(self, x: str, t, rel: str, c: Column, ptrs: dict[str, tuple[str, ...]], parts=None) -> str:
+        """JSON text of x, of DuckDB type t, at position rel of column c's value (NULL stays NULL). `parts`: the
+        column's encoded positions ([] for [*]); None for a spec of tool 1.x, which states none."""
         tid = t.id
+        enc = (parts or {}).get(rel)
+        if enc is not None and enc["form"] != "extension":
+            if tid == "struct":  # a list element with derived parts
+                return self.encode(enc, {f: f"{x}.{_ident(f)}" for f, _ in t.children}, c)
+            return self.encode(enc, {encoding_parts(enc)[0][0]: x}, c)
         if tid == "struct":
-            return f"CASE WHEN {x} IS NULL THEN NULL ELSE {self.struct(x, t, rel, c, ptrs)} END"
+            return f"CASE WHEN {x} IS NULL THEN NULL ELSE {self.struct(x, t, rel, c, ptrs, parts)} END"
         if tid == "list":
             e = self.var()
-            elem = self.value(e, t.children[0][1], f"{rel}[]", c, ptrs)
+            elem = self.value(e, t.children[0][1], f"{rel}[]", c, ptrs, parts)
             return (
                 f"CASE WHEN {x} IS NULL THEN NULL ELSE '[' || array_to_string(list_transform({x}, "
                 f"lambda {e}: coalesce({elem}, 'null')), ',') || ']' END"
@@ -139,31 +146,81 @@ class _Writer:
             "(the round trip writes VARCHAR, integers, DOUBLE and BOOLEAN)"
         )
 
-    def struct(self, x: str, t, rel: str, c: Column, ptrs) -> str:
+    def struct(self, x: str, t, rel: str, c: Column, ptrs, parts=None) -> str:
         fields = list(t.children)
         names = [f for f, _ in fields]
-        slots = [(f, ft) for f, ft in fields if f.startswith("value_")]
-        parts: list[tuple[str, str]] = []
-        if "name" in names and slots:  # an extension: its value_* slots are one `value`
-            if self.table.extension_slots.get(c.name) != "json-type":
-                raise SpecError(
-                    f"table {self.table.name}: column {c.name}: the round trip needs json-type extension slots "
-                    "(with slots by name, the value's JSON kind is not known)"
-                )
-            values = [self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, ptrs) for f, ft in slots]
-            # Every slot NULL: the value was [] (an empty array fills no slot; a null or absent value stops the
-            # build), possible only where the struct has an array slot.
-            if any(ft.id == "list" for _, ft in slots):
-                values.append("'[]'")
-            for f, ft in fields:
-                if f == slots[0][0]:
-                    parts.append(("value", f"coalesce({', '.join(values)})"))
-                elif not f.startswith("value_"):
-                    parts.append((f, self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, ptrs)))
+        if parts is not None:
+            is_ext = parts.get(rel, {}).get("form") == "extension"
         else:
-            for f, ft in fields:
-                parts.append((f, self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, ptrs)))
-        return self.obj(parts)
+            is_ext = "name" in names and any(f.startswith("value_") for f in names)
+        slots = [(f, ft) for f, ft in fields if f.startswith("value_")] if is_ext else []
+        types = dict(fields)
+        members: list[tuple[str, str]] = []
+        done: set[str] = set()
+        for f, ft in fields:
+            if f in done:
+                continue
+            if is_ext and f.startswith("value_"):
+                if f != slots[0][0]:
+                    continue
+                if self.table.extension_slots.get(c.name) != "json-type":
+                    raise SpecError(
+                        f"table {self.table.name}: column {c.name}: the round trip needs json-type extension "
+                        "slots (with slots by name, the value's JSON kind is not known)"
+                    )
+                values = [self.value(f"{x}.{_ident(s)}", st, f"{rel}.{s}", c, ptrs, parts) for s, st in slots]
+                # Every slot NULL: the value was [] (an empty array fills no slot; a null or absent value stops
+                # the build), possible only where the struct has an array slot.
+                if any(st.id == "list" for _, st in slots):
+                    values.append("'[]'")
+                members.append(("value", f"coalesce({', '.join(values)})"))
+                continue
+            enc = (parts or {}).get(f"{rel}.{f}")
+            if enc is not None and enc["form"] != "extension":
+                named = object_fields(f, enc)
+                missing = [n for n, _, _ in named if n not in types]
+                if missing:
+                    raise SpecError(
+                        f"table {self.table.name}: column {c.name}: encoded {f} at {rel or '(column)'} has no "
+                        f"field(s) {missing}"
+                    )
+                done.update(n for n, _, _ in named)
+                members.append((f, self.encode(enc, {p: f"{x}.{_ident(n)}" for n, p, _ in named}, c)))
+                continue
+            members.append((f, self.value(f"{x}.{_ident(f)}", ft, f"{rel}.{f}", c, ptrs, parts)))
+        return self.obj(members)
+
+    def encode(self, enc: dict, ps: dict[str, str], c: Column) -> str:
+        """JSON text of a value from its parts (`ps`: part -> SQL), by its encoding; NULL when every part is NULL
+        (the value was absent, or a JSON null list element)."""
+        form, ctx = enc["form"], self.ctx(c)
+        targets = enc.get("targets") or []
+        tl = "[" + ", ".join(_lit(t) for t in targets) + "]"
+
+        def string(reading: str) -> str:
+            if reading == "plain":
+                return f"cgp_jstr({ps['string']})"
+            if reading == "pointer":
+                ident = ps["id"]
+                if len(targets) == 1:
+                    return f"cgp_jstr({_lit('#/' + targets[0] + '/')} || {ident})"
+                sec = f"cgp_ptr_section({ps['section']}, {ident}, {tl}, {ctx}, {self.key})"
+                return f"cgp_jstr('#/' || {sec} || '/' || {ident})"
+            return f"cgp_jstr(cgp_iri_text({ps['section']}, {ps['id']}, {tl}, {ctx}, {self.key}))"
+
+        if form == "json":
+            return ps["json"]
+        if form == "range":
+            ex, lo, hi = ps["integer"], ps["min"], ps["max"]
+            return (
+                f"CASE WHEN {ex} IS NOT NULL THEN CAST({ex} AS VARCHAR) "
+                f"WHEN {lo} IS NULL AND {hi} IS NULL THEN NULL "
+                f"ELSE '[' || coalesce(CAST({lo} AS VARCHAR), 'null') || ',' || coalesce(CAST({hi} AS VARCHAR), "
+                "'null') || ']' END"
+            )
+        if form == "string-or-object":
+            return f"coalesce({string(enc['string'])}, {ps['json']})"
+        return string(form)
 
     # the record -------------------------------------------------------------------------------------------------
 
@@ -178,6 +235,8 @@ class _Writer:
             if c.derivation.kind in RANGE_KINDS:
                 ranges.setdefault(c.derivation.path, {})[c.derivation.kind] = c
         parts: list[tuple[str, str]] = []
+        encoded: dict[str, dict[str, str]] = {}  # path -> part -> SQL, of part columns
+        order: list[tuple[int, str, Column]] = []
         for c in table.columns:
             kind, path = c.derivation.kind, c.derivation.path
             where = f"table {table.name}: column {c.name}"
@@ -186,6 +245,9 @@ class _Writer:
                     parts.append(("id", f"cgp_jstr({self.ref(c.name)})"))
                 continue
             if kind in ("ordinal", "pointer-section"):
+                continue
+            if kind == "id-present":
+                parts.append(("id", f"CASE WHEN {self.ref(c.name)} THEN cgp_jstr({self.key}) END"))
                 continue
             m = _PROPERTY_PATH.fullmatch(path or "")
             if not m:
@@ -224,9 +286,25 @@ class _Writer:
                 if d.pointers and not d.pointer_targets:
                     raise SpecError(f"{where}: pointers need their target sections ({{position: [sections]}})")
                 ptrs = {p.replace("[*]", "[]"): ts for p, ts in zip(d.pointers, d.pointer_targets, strict=True)}
-                parts.append((prop, self.value(self.ref(c.name), t, "", c, ptrs)))
+                encs = None if d.parts is None else {p.replace("[*]", "[]"): e for p, e in d.parts.items()}
+                parts.append((prop, self.value(self.ref(c.name), t, "", c, ptrs, encs)))
+            elif kind == "part":
+                group = encoded.setdefault(path, {})
+                if not group:
+                    parts.append((prop, None))  # placed here; written once the group is complete
+                    order.append((len(parts) - 1, path, c))
+                group[c.derivation.part] = self.ref(c.name)
             else:
                 raise SpecError(f"{where}: the round trip can't write back a {kind} column")
+        for i, path, c in order:
+            enc = c.derivation.encoding
+            want = {p for p, _ in encoding_parts(enc)}
+            if set(encoded[path]) != want:
+                raise SpecError(
+                    f"table {table.name}: path {path} needs the part columns {sorted(want)} to be written back, "
+                    f"has {sorted(encoded[path])}"
+                )
+            parts[i] = (parts[i][0], self.encode(enc, encoded[path], c))
         unused = sorted(set(sections) - used_sections)
         if unused:
             raise SpecError(
@@ -308,8 +386,8 @@ def lossless_problems(spec: Spec) -> list[str]:
         if not t.known_fields:
             out.append(f"{tw}: needs known_fields: true")
         ords = t.columns_of("ordinal")
-        if len(ords) != 1 or t.columns[-1] is not ords[0]:
-            out.append(f"{tw}: needs one ordinal column, as its last column")
+        if len(ords) > 1 or (ords and t.columns[-1] is not ords[0]):
+            out.append(f"{tw}: an ordinal column (tool 1.x) is one, the last column")
     return out
 
 
@@ -776,12 +854,19 @@ def _root_values(con: duckdb.DuckDBPyConnection, path: Path | None) -> dict[str,
 
 
 def _open_table(con: duckdb.DuckDBPyConnection, t: Table, path: Path, spec: Spec) -> int:
-    """A view of the table's file, checked: the spec's columns, ordinals 0..n-1. Returns n."""
+    """A view of the table's file, checked: the spec's columns, distinct non-NULL keys, and (tool 1.x) ordinals
+    0..n-1. Returns n."""
     from .build import describe_file, sql_str
 
     if describe_file(con, path) != t.describe():
         raise RoundTripError(f"{path.name}: its columns are not table {t.name}'s of spec {spec.label}")
     con.execute(f"CREATE VIEW {_ident(t.name)} AS SELECT * FROM read_parquet({sql_str(str(path))})")
+    k = _ident(t.columns_of("key")[0].name)
+    n, keys = con.execute(f"SELECT count(*), count(DISTINCT {k}) FROM {_ident(t.name)}").fetchone()
+    if keys != n:
+        raise RoundTripError(f"table {t.name}: {n} rows but {keys} distinct keys: a section can't hold them")
+    if not t.columns_of("ordinal"):  # tool 2.0.0 keeps no record order (ADR 0008 decision 1.1)
+        return n
     o = _ident(t.columns_of("ordinal")[0].name)
     n, n_o, distinct, lo, hi = con.execute(
         f"SELECT count(*), count({o}), count(DISTINCT {o}), min({o}), max({o}) FROM {_ident(t.name)}"
@@ -838,7 +923,8 @@ def _write_section(con, sink: _Out, t: Table, n: int, hasher: Hasher, work: Path
     """The table's record lines (indented, `,` between them) in ordinal order, each hashed; returns the section's
     records sha256. A failing row (a pointer section outside the column's targets) stops it."""
     key = _ident(t.columns_of("key")[0].name)
-    order = _ident(t.columns_of("ordinal")[0].name)
+    ordinals = t.columns_of("ordinal")
+    order = _ident(ordinals[0].name) if ordinals else key  # a set of tool 1.x keeps its record order
     sql = f"SELECT {key}, {record_sql(t)} FROM {_ident(t.name)} ORDER BY {order}"
     lines = _Lines(work, f"table {t.name}")
     buf: list[str] = []

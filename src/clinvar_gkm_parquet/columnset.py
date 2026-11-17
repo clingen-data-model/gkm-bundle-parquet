@@ -8,6 +8,7 @@ or URL, YAML; a URL is cached), refuses an entry written twice, and checks the t
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +18,8 @@ from .errors import CompileError
 from .schemas import default_cache_dir
 from .transport import is_url, read_all
 
-TOP_KEYS = frozenset({"schema", "version_property", "collections", "sections"})
+TOP_KEYS = frozenset({"schema", "version_property", "collections", "sections", "projection"})
+PROJECTION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,11 @@ def check_keys(doc: object, source: str) -> None:
         raise CompileError(f"column set {source}: `schema` must name the $id of the schema it pairs with")
     if not isinstance(doc.get("sections"), dict) or not doc["sections"]:
         raise CompileError(f"column set {source}: `sections` must map each collection to its properties")
+    name = doc.get("projection")
+    if "projection" in doc and not (isinstance(name, str) and PROJECTION_NAME.fullmatch(name)):
+        raise CompileError(
+            f"column set {source}: `projection` names the projection (letters, digits, '._-'), not {name!r}"
+        )
 
 
 def load_column_set(source: str | Path, *, cache_dir: Path | None = None) -> ColumnSet:

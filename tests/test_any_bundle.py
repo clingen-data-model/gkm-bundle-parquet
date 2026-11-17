@@ -200,13 +200,33 @@ def test_compile_spec_takes_the_pairing(capsys):
     assert f"# column_set_sha256: {source.column_set_sha256}" in stdout
 
 
-def test_a_pairing_flag_alone_is_refused(tmp_path, capsys):
-    rc, _, stderr = cli(
-        capsys, "build", "--bundle-schema", CIVIC_SCHEMA, "--full", CIVIC_BUNDLES[0], "--out", tmp_path / "o"
-    )
-    assert rc == 2 and "--bundle-schema and --column-set are required" in stderr
+@pytest.mark.parametrize("bundle", CIVIC_BUNDLES, ids=lambda p: p.stem)
+def test_a_schema_alone_builds_its_generated_default(bundle, tmp_path, capsys):
+    """ADR 0007 decision 2.2: with no column set the build takes the schema's generated default, and its files
+    round-trip to the bundle's records."""
+    out = tmp_path / "o"
+    rc, _, stderr = cli(capsys, "build", "--bundle-schema", CIVIC_SCHEMA, "--full", bundle, "--out", out)
+    assert rc == 0, stderr
+    meta = kv_of(out / "assertion.parquet")
+    assert (meta["column_set_kind"], meta["policy_version"]) == ("default", "2.0") and "projection" not in meta
+    rc, stdout, stderr = cli(capsys, "verify", out, "--roundtrip", "--full", bundle)
+    assert rc == 0 and "round trip: identical" in stdout, stdout + stderr
+    rc, stdout, stderr = cli(capsys, "verify", out, "--bundle-schema", CIVIC_SCHEMA)
+    assert rc == 0 and "pairing" not in stdout, stdout + stderr
+
+
+def test_a_column_set_alone_is_refused(capsys):
     rc, stdout, stderr = cli(capsys, "compile-spec", "--column-set", CIVIC_COLUMNS)
-    assert rc == 2 and not stdout and "--bundle-schema and --column-set are required" in stderr
+    assert rc == 2 and not stdout and "--bundle-schema is required" in stderr
+
+
+def test_a_column_set_that_neither_complies_nor_names_a_projection_is_refused(tmp_path, capsys):
+    """ADR 0008 decision 3: a column set other than the default must declare itself a named projection."""
+    unnamed = tmp_path / "unnamed.yaml"
+    unnamed.write_text(re.sub(r"(?m)^projection: .*\n", "", CIVIC_COLUMNS.read_text()))
+    rc, stdout, stderr = cli(capsys, "compile-spec", "--bundle-schema", CIVIC_SCHEMA, "--column-set", unnamed)
+    assert rc == 2 and not stdout
+    assert "doesn't compile to the default" in stderr and "doesn't declare itself a projection" in stderr, stderr
 
 
 def test_a_column_set_for_another_schema_is_refused(tmp_path, capsys):
@@ -308,7 +328,7 @@ def test_a_selection_reads_a_bundle_in_another_layout(tmp_path, capsys):
 def test_a_bundle_with_no_pairing_is_refused_before_it_is_read(tmp_path, capsys):
     """There is no default bundle (ADR 0009): the tool reads no version from the bundle to find a schema."""
     rc, _, stderr = cli(capsys, "build", "--full", tmp_path / "missing.json", "--out", tmp_path / "o")
-    assert rc == 2 and "--bundle-schema and --column-set are required" in stderr and "no default" in stderr
+    assert rc == 2 and "--bundle-schema is required" in stderr and "no default" in stderr
     assert not (tmp_path / "o").exists()
 
 
@@ -666,7 +686,7 @@ def test_verify_checks_a_pairing_it_is_given(excerpt_set, sub_bundle, capsys):
     for key in ("table_spec_sha256", "schema_set_sha256", "column_set_sha256"):
         assert f"--bundle-schema and --column-set compile to {key}" in stdout
     rc, _, stderr = cli(capsys, "verify", excerpt_set, "--column-set", CIVIC_COLUMNS)
-    assert rc == 2 and "--bundle-schema and --column-set go together" in stderr
+    assert rc == 2 and "--column-set needs --bundle-schema" in stderr
 
 
 def test_verify_refuses_a_set_of_a_retired_spec(excerpt_copy, capsys):
