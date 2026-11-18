@@ -13,11 +13,11 @@ import json
 import os
 from pathlib import Path
 
-from clinvar_gkm_parquet.bundle import BundleShape, RootRules
-from clinvar_gkm_parquet.compiled import compile_pairing
-from clinvar_gkm_parquet.compiled import reader_rules as _reader_rules
-from clinvar_gkm_parquet.errors import SchemaVersionError
-from clinvar_gkm_parquet.spec import Spec, SpecSource
+from gkm_bundle_parquet.bundle import BundleShape, RootRules
+from gkm_bundle_parquet.compiled import compile_pairing
+from gkm_bundle_parquet.compiled import reader_rules as _reader_rules
+from gkm_bundle_parquet.errors import SchemaVersionError
+from gkm_bundle_parquet.spec import Spec, SpecSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
 # ClinVar-GKM's 1.1.0 schema set and column set, as the 1.x tool shipped them (tests/fixtures/clinvar-gkm/).

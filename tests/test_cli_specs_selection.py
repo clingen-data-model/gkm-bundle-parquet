@@ -19,8 +19,8 @@ import pytest
 from _fixture import FIXTURE, PAIRING, SECTIONS, SPEC_SOURCE, reader_rules
 from _input_helpers import local_input
 
-from clinvar_gkm_parquet import select as sel
-from clinvar_gkm_parquet.cli import main
+from gkm_bundle_parquet import select as sel
+from gkm_bundle_parquet.cli import main
 
 FULL = ["--full", FIXTURE, *PAIRING]
 FIXTURE_SHA = (FIXTURE.parent / (FIXTURE.name + ".sha256")).read_text().split()[0]
@@ -38,7 +38,7 @@ def cli(capsys, *args) -> tuple[int, str, str]:
 
 def kv(path: Path) -> dict[str, str]:
     rows = duckdb.connect().execute(f"SELECT key, value FROM parquet_kv_metadata('{path}')").fetchall()
-    p = "clinvar_gkm_parquet."
+    p = "gkm_bundle_parquet."
     return {k.decode()[len(p) :]: v.decode() for k, v in rows if k.decode().startswith(p)}
 
 

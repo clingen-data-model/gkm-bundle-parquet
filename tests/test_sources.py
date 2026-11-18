@@ -11,11 +11,11 @@ import urllib.error
 import pytest
 from _input_helpers import FIXTURE, local_input, sha256_of
 
-from clinvar_gkm_parquet import transport
-from clinvar_gkm_parquet.errors import InputError
-from clinvar_gkm_parquet.model import InputFile
-from clinvar_gkm_parquet.sources import parse_sidecar, resolve_input
-from clinvar_gkm_parquet.transport import USER_AGENT, open_stream
+from gkm_bundle_parquet import transport
+from gkm_bundle_parquet.errors import InputError
+from gkm_bundle_parquet.model import InputFile
+from gkm_bundle_parquet.sources import parse_sidecar, resolve_input
+from gkm_bundle_parquet.transport import USER_AGENT, open_stream
 
 BASE = "https://data.example.org"
 L = "v1/"

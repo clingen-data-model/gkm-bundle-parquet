@@ -20,10 +20,10 @@ import pytest
 from _fixture import SECTIONS, SPEC, SPEC_SOURCE
 from _tables_helpers import connect, read_fixture, roundtrip_check, rows
 
-from clinvar_gkm_parquet import build, sqltemplate
-from clinvar_gkm_parquet.errors import RoundTripError, SpecError
-from clinvar_gkm_parquet.spec import RANGE_KINDS, check_compiled, parse_spec
-from clinvar_gkm_parquet.sqltemplate import canonical_type, render_generic
+from gkm_bundle_parquet import build, sqltemplate
+from gkm_bundle_parquet.errors import RoundTripError, SpecError
+from gkm_bundle_parquet.spec import RANGE_KINDS, check_compiled, parse_spec
+from gkm_bundle_parquet.sqltemplate import canonical_type, render_generic
 
 SOURCE = SPEC_SOURCE
 BASE = read_fixture()

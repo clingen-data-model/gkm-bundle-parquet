@@ -17,8 +17,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from clinvar_gkm_parquet.errors import ToolError
-from clinvar_gkm_parquet.schemas import fetch_set, write_set
+from gkm_bundle_parquet.errors import ToolError
+from gkm_bundle_parquet.schemas import fetch_set, write_set
 
 
 def main() -> int:

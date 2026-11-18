@@ -694,7 +694,7 @@ class SectionPipeline:
     def run(self) -> StreamState:
         self._stage.mkdir(parents=True, exist_ok=True)
         inputs = self.inputs
-        worker = threading.Thread(target=self._work, name="clinvar-gkm-parquet-worker")
+        worker = threading.Thread(target=self._work, name="gkm-bundle-parquet-worker")
         worker.start()
         try:
             self.log(f"streaming {inputs.full.name}")
@@ -898,7 +898,7 @@ def write_manifest(
         "derived": True,
         "note": (
             "Parquet tables derived from the JSON bundle listed under inputs by "
-            f"clinvar-gkm-parquet {kv['tool_version']} (table spec {spec_name} {kv['table_spec_version']})"
+            f"gkm-bundle-parquet {kv['tool_version']} (table spec {spec_name} {kv['table_spec_version']})"
             f"{subset}. The bundle is the record; these files may be regenerated."
         ),
         "build_date": ended_at[:10],
@@ -906,7 +906,7 @@ def write_manifest(
         "release": None,
         # A producer's release index may read builder, dataset and files[] from this manifest. dataset names the
         # producer's own dataset, which the tool can't know.
-        "builder": f"clinvar-gkm-parquet {kv['tool_version']}",
+        "builder": f"gkm-bundle-parquet {kv['tool_version']}",
         "dataset": None,
         "files": [
             {"name": r.file.name, "size": r.size, "sha256": r.sha256}
@@ -1224,7 +1224,7 @@ def resolve_build_inputs(args) -> BuildInputs:
 
 
 def _log(msg: str) -> None:
-    print(f"clinvar-gkm-parquet: {msg}", file=sys.stderr, flush=True)
+    print(f"gkm-bundle-parquet: {msg}", file=sys.stderr, flush=True)
 
 
 PAIRING_REQUIRED = (
@@ -1253,7 +1253,7 @@ def resolve_pairing(args) -> tuple[Spec, SpecSource]:
 
 
 def run_build_command(args) -> int:
-    """`clinvar-gkm-parquet build`: compile the spec from the pairing, resolve the selection options and the input
+    """`gkm-bundle-parquet build`: compile the spec from the pairing, resolve the selection options and the input
     from the CLI arguments, build, print a summary."""
     from .driver import driver_from_args
 

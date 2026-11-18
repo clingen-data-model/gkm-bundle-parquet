@@ -8,7 +8,7 @@ import urllib.error
 
 import pytest
 
-from clinvar_gkm_parquet import transport
+from gkm_bundle_parquet import transport
 
 
 @pytest.fixture(scope="session", autouse=True)

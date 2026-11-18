@@ -8,7 +8,7 @@ import os
 import duckdb
 import pytest
 
-from clinvar_gkm_parquet import build
+from gkm_bundle_parquet import build
 
 GIB = 2**30
 

@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 from _fixture import CLINVAR_SCHEMA
 
-from clinvar_gkm_parquet.errors import SchemaSetError
-from clinvar_gkm_parquet.schemas import (
+from gkm_bundle_parquet.errors import SchemaSetError
+from gkm_bundle_parquet.schemas import (
     MANIFEST,
     fetch_set,
     load_schema_set,

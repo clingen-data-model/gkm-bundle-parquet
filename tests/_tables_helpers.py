@@ -15,10 +15,10 @@ from pathlib import Path
 import duckdb
 from _fixture import FIXTURE, SECTIONS
 
-from clinvar_gkm_parquet.canonical import Hasher
-from clinvar_gkm_parquet.roundtrip import check_rows, source_digest
-from clinvar_gkm_parquet.spec import Table
-from clinvar_gkm_parquet.sqltemplate import macros_sql, render_generic
+from gkm_bundle_parquet.canonical import Hasher
+from gkm_bundle_parquet.roundtrip import check_rows, source_digest
+from gkm_bundle_parquet.spec import Table
+from gkm_bundle_parquet.sqltemplate import macros_sql, render_generic
 
 _SECTION = re.compile(r'^  "(\w+)": \{$')
 _RECORD = re.compile(r'^    ("(?:[^"\\]|\\.)*"): (.*?),?$')

@@ -1,5 +1,5 @@
 [project]
-name = "clinvar-gkm-parquet"
+name = "gkm-bundle-parquet"
 version = "1.1.0"
 description = "Build Parquet tables from GKM JSON bundles, rebuild the bundle from them, and validate bundles"
 readme = "README.md"
@@ -24,7 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 # `validate --engine python`: the GA4GH GKM Toolkit's validator, the reference the rs engine is checked against.
 # Its GA4GH dependencies are pre-releases, so install it with a pre-release resolver
-# (`uv sync --extra reference`, or `pip install --pre 'clinvar-gkm-parquet[reference]'`).
+# (`uv sync --extra reference`, or `pip install --pre 'gkm-bundle-parquet[reference]'`).
 reference = [
     "ga4gh.gkm==0.4.0; python_version >= '3.11'",
 ]
@@ -33,7 +33,7 @@ reference = [
 Repository = "https://github.com/clingen-data-model/gkm-bundle-parquet"
 
 [project.scripts]
-clinvar-gkm-parquet = "clinvar_gkm_parquet.cli:main"
+gkm-bundle-parquet = "gkm_bundle_parquet.cli:main"
 
 [dependency-groups]
 dev = [
@@ -48,7 +48,7 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/clinvar_gkm_parquet"]
+packages = ["src/gkm_bundle_parquet"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "scripts", "README.md", "CHANGELOG.md", "LICENSE"]

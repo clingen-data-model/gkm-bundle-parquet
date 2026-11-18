@@ -22,8 +22,8 @@ from _build_helpers import passthrough_sql as _passthrough_sql
 from _fixture import CLINVAR_COLUMNS, CLINVAR_SCHEMA, COUNTS, FIXTURE, SECTIONS, SPEC, SPEC_SOURCE
 from _input_helpers import bundle_bytes, fixture_sections, local_input, write_gz
 
-from clinvar_gkm_parquet import build as build_mod
-from clinvar_gkm_parquet.build import (
+from gkm_bundle_parquet import build as build_mod
+from gkm_bundle_parquet.build import (
     KV_KEYS,
     KV_PREFIX,
     build,
@@ -33,8 +33,8 @@ from clinvar_gkm_parquet.build import (
     resolve_build_inputs,
     run_build_command,
 )
-from clinvar_gkm_parquet.errors import BundleFormatError, InputError, SpecError
-from clinvar_gkm_parquet.model import BuildInputs, InputFile
+from gkm_bundle_parquet.errors import BundleFormatError, InputError, SpecError
+from gkm_bundle_parquet.model import BuildInputs, InputFile
 
 
 def _sha(p: Path) -> str:
@@ -316,7 +316,7 @@ def test_build_end_to_end(passthrough, tmp_path):
     for k in ("generated_at", "started_at", "tool_version", "duckdb_version", "note"):
         assert m[k]
     # the fields ClinVar-GKM's r2_layout.build_index reads (its own parquet-manifest shape)
-    assert m["builder"] == f"clinvar-gkm-parquet {m['tool_version']}" and m["dataset"] is None
+    assert m["builder"] == f"gkm-bundle-parquet {m['tool_version']}" and m["dataset"] is None
     assert m["files"] == [
         {"name": n, "size": (out / n).stat().st_size, "sha256": _sha(out / n)}
         for n in sorted(f"{s}.parquet" for s in SECTIONS)
@@ -432,7 +432,7 @@ def test_worker_failure_stops_the_reader(passthrough, tmp_path, monkeypatch):
         build(_fixture_inputs(), tmp_path / "out", spec=passthrough)
     assert len(closed) <= build_mod.QUEUE_SIZE + 2 < len(SECTIONS)  # the reader stopped early
     assert list((tmp_path / "out").iterdir()) == []
-    assert not any(t.name == "clinvar-gkm-parquet-worker" for t in threading.enumerate())
+    assert not any(t.name == "gkm-bundle-parquet-worker" for t in threading.enumerate())
 
 
 def test_reader_failure_stops_the_worker(passthrough, tmp_path):
@@ -442,7 +442,7 @@ def test_reader_failure_stops_the_worker(passthrough, tmp_path):
         build(_fixture_inputs(full=local_input(path)), tmp_path / "out", spec=passthrough)
     assert list((tmp_path / "out").iterdir()) == []  # the tables built before the error are removed
     assert not (tmp_path / "out.work").exists()
-    assert not any(t.name == "clinvar-gkm-parquet-worker" for t in threading.enumerate())
+    assert not any(t.name == "gkm-bundle-parquet-worker" for t in threading.enumerate())
 
 
 def test_checksum_mismatch_found_at_the_end_removes_the_tables(passthrough, tmp_path):
@@ -580,7 +580,7 @@ def test_build_api_needs_a_spec(tmp_path):
 def test_build_and_verify_real_fixture(passthrough, tmp_path):
     """The pass-through build on the fixture is deterministic across threads; verify and the streaming bundle
     recompute pass."""
-    from clinvar_gkm_parquet.verify import bundle_recompute, recompute_failed, verify_dir
+    from gkm_bundle_parquet.verify import bundle_recompute, recompute_failed, verify_dir
 
     spec = passthrough
     a = build(_fixture_inputs(), tmp_path / "a", spec=spec, threads=1)

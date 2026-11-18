@@ -136,7 +136,7 @@ whitespace don't count); any difference stops the build. A `json` block written 
 `key_order` and `sorted_columns`, which are read and ignored.
 
 `lossless: true`: the spec encodes every record of the bundle (ADR 0005, amended by ADR 0008), which
-`clinvar-gkm-parquet rebuild` writes back, record-identical. Every table needs a `json` block, and an `ordinal`
+`gkm-bundle-parquet rebuild` writes back, record-identical. Every table needs a `json` block, and an `ordinal`
 column, if it has one (tool 1.x), as its last column; each section has exactly one table, with no row filter and
 with `known_fields`; and the JSON layout must place every column (roundtrip.lossless_problems).
 
