@@ -130,7 +130,7 @@ with every open branch.
 | w3id 1.1.0 schema-set sha256 (`0340922…` against `741a29f…`) | Diagnosed (below); documented in step 5 (README, "Schema sources"; `docs/column-set-format.md`, "The schema") |
 | Generated default on ClinVar-GKM's 1.2.0 schema | Run 2026-11-18 (below). Not final: rerun `generate` (and the commands below) on ClinVar-GKM's final 1.2.0 schema, which adds `primaryCoding` to `ClinvarAggregateClassification` (clinvar-gkm PR #225, for issue #202), before the tool's default for ClinVar-GKM is considered final |
 | 4. Rename | Done, #30 (`9b6bf60`); #21 superseded |
-| 5. Docs, changelog, compatibility matrix | This PR: the changelog's 2.0.0 entry with a command-by-command migration; `version --json` adds `policy_version` and `kv_prefixes_read` (the prefixes `verify` and `rebuild` read, which `verify.read_kv` now takes from `compat`); the README's matrix, `version --json` example and "Schema sources"; the docs' stale "on `main`" notes |
+| 5. Docs, changelog, compatibility matrix | #31: the changelog's 2.0.0 entry with a command-by-command migration; `version --json` adds `policy_version` and `kv_prefixes_read` (the prefixes `verify` and `rebuild` read, which `verify.read_kv` now takes from `compat`); the README's matrix, `version --json` example and "Schema sources"; the docs' stale "on `main`" notes |
 | Full-size check on a VM | Left: a cost quote first, then the maintainer's approval, before any cloud spend |
 | v2.0.0 release (`release-tool` skill, the pending PyPI publisher) | Left: after the full-size check; sets the version and the changelog date, drops the "planned" notes |
 
