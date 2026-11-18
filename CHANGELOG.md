@@ -8,8 +8,7 @@ All notable changes to this tool. Each release states the table-spec versions it
 For 2.0.0. The removals of what 1.1.0 deprecated (ADR 0008, ADR 0009, plan Phase 3 step 3): the tool names no producer
 and has no default bundle, and every run takes one bundle and its pairing. It writes table spec `sections` 2.0 (`draft`)
 only, compiled from the pairing, and pins DuckDB 1.5.4; `version --json` lists no producer's `schema_version`s. The
-rename to `gkm-bundle-parquet` comes later, as the last step before 2.0.0: until then the package, the command, the
-key-value prefix, the cache directory and the User-Agent keep the name `clinvar-gkm-parquet`.
+tool is renamed `gkm-bundle-parquet` (plan Phase 3 step 4, below).
 
 The removals alone don't change the output otherwise. With the ClinVar-GKM 1.1.0 pairing, on the real excerpt, the CIViC
 fixture, a selection and the 2026-10-31 delta (the newest published), `table-spec.json`, the mini-bundles, `compile-spec`
@@ -72,7 +71,7 @@ position.
   and number spelling no longer count, for any source layout; a changed value still does. The build's row check
   compares each row's record sha256 with its source record's; `rebuild` and `verify --roundtrip` compare records
   sha256s, not text sha256s.
-  - Recorded: each file's `clinvar_gkm_parquet.section_records_sha256` (the sha256 of the sorted lines `<key> TAB
+  - Recorded: each file's `gkm_bundle_parquet.section_records_sha256` (the sha256 of the sorted lines `<key> TAB
     <record sha256>`) and the manifest's `records_sha256` (the sha256 of the sorted lines `<section> TAB <section
     records sha256>` plus `$ TAB <root sha256>`). Removed: `section_text_sha256`, `source_text_sha256` and
     `source_text_size`. The manifest's `round_trip.promise` is `record-identical` for every layout.
@@ -110,7 +109,13 @@ position.
 - **`validate` has no default version property** (ADR 0009 decision 4): 1.x used `schema_version` unless the given
   schema's root didn't declare it. Pass `--version-property schema_version` for ClinVar-GKM bundles to validate each record
   with the bundle's version, as before. Without it, a version at the root is validated as a root value.
-- **The deprecation warnings go with what they named.** Only the old name's warning stays, until the rename.
+- **The deprecation warnings go with what they named**, the old name's with the rename.
+- **Renamed `gkm-bundle-parquet`** (ADR 0009 decision 3): the PyPI project and the command are `gkm-bundle-parquet`, the
+  package `gkm_bundle_parquet`; so are the cache directory (`$XDG_CACHE_HOME/gkm-bundle-parquet/`), the User-Agent
+  (`gkm-bundle-parquet/<version>`), the manifest's `builder` and the selection's mini-bundle
+  (`gkm-bundle-parquet_selection.json.gz`). Every key-value entry a build writes has the prefix `gkm_bundle_parquet.`
+  instead of `clinvar_gkm_parquet.`, which changes every file's bytes. `verify` and `rebuild` read either prefix, so sets
+  written by 1.x stay checkable and rebuildable; a file with entries under both is refused.
 - **Manifest** (`manifest.json`):
   - `note` names the bundle (one), not "the ClinVar-GKM JSON bundle(s)";
   - `source_release` and `release` are always `null` (the tool doesn't know which release a file is; a producer that
@@ -168,6 +173,7 @@ position.
 
 | 1.x | 2.0.0 |
 | --- | --- |
+| `clinvar-gkm-parquet <command>`, `import clinvar_gkm_parquet` | `gkm-bundle-parquet <command>`, `import gkm_bundle_parquet` |
 | `--release R` / `--index I` | resolve the release yourself; `--full <url> --sha256 <hex>` (or its `.sha256` sidecar) |
 | `--delta D --manifest M` (replay) | build the bundle you want to read; the tool reads one |
 | `--full-source-release R` | nothing: the manifest's `source_release` and `release` are `null` for the producer to fill |

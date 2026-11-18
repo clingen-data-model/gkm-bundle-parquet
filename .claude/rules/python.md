@@ -8,7 +8,7 @@ paths:
 
 # Python package conventions
 
-The package, `clinvar_gkm_parquet`: `cli.py`, `build.py` (the section pipeline), `model.py` (the data passed between
+The package, `gkm_bundle_parquet`: `cli.py`, `build.py` (the section pipeline), `model.py` (the data passed between
 stages, and the staging format), `sources.py` (one input: a path or URL and its expected sha256, from `--sha256` or a
 `<file>.sha256` sidecar), `spec.py` (the compiled spec's format and its checks), `sqltemplate.py` (renders each table's SQL
 from the spec, with the macros in `sql/_macros.sql`), `select.py` (the selection engine: pointer walk and mini-bundle),
@@ -36,7 +36,7 @@ The package ships no schema set and no column set. The suite's ClinVar-GKM pairi
 
 ## Layout and tooling
 
-- `src/` layout, package `clinvar_gkm_parquet`, console script `clinvar-gkm-parquet`.
+- `src/` layout, package `gkm_bundle_parquet`, console script `gkm-bundle-parquet`.
 - Python `>=3.10`. Manage environments with `uv`; lint and format with `ruff`; test with `pytest`.
 - Runtime dependencies stay minimal: `duckdb` (pinned to the exact version that defines the output, see below),
   `PyYAML` (reads column sets) and `jsonschema-rs` (`validate`'s default engine, pinned exactly, because
@@ -74,9 +74,9 @@ The package ships no schema set and no column set. The suite's ClinVar-GKM pairi
 
 ## Network
 
-- Every HTTP request sends `User-Agent: clinvar-gkm-parquet/<version>`.
+- Every HTTP request sends `User-Agent: gkm-bundle-parquet/<version>`.
 - A schema set's `$ref`s are followed on `https://w3id.org/` only, as JSON data, once per root, into the user cache
-  (`$XDG_CACHE_HOME/clinvar-gkm-parquet/`); a set on disk is never fetched.
+  (`$XDG_CACHE_HOME/gkm-bundle-parquet/`); a set on disk is never fetched.
 - Respect the CDN limit of 250 requests per 10 s: one stream per large file, retry 429 and 5xx with backoff,
   resume interrupted downloads with HTTP `Range`.
 - Unit tests never touch the network, and `tests/conftest.py` enforces it and gives the suite a private cache.

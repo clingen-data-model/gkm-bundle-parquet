@@ -21,20 +21,20 @@ import yaml
 from _fixture import CLINVAR_COLUMNS, CLINVAR_SCHEMA, FIXTURE, GOLDEN_SECTIONS_SPEC, SECTIONS, SPEC, SPEC_SOURCE
 from _input_helpers import local_input
 
-from clinvar_gkm_parquet import build as build_mod
-from clinvar_gkm_parquet.columnset import load_column_set, parse_column_set
-from clinvar_gkm_parquet.compiler import (
+from gkm_bundle_parquet import build as build_mod
+from gkm_bundle_parquet.columnset import load_column_set, parse_column_set
+from gkm_bundle_parquet.compiler import (
     compile_sections,
     generate_default,
     root_parts,
     spec_differences,
     table_spec_sha256,
 )
-from clinvar_gkm_parquet.errors import CompileError
-from clinvar_gkm_parquet.model import BuildInputs
-from clinvar_gkm_parquet.roundtrip import rebuild
-from clinvar_gkm_parquet.schemas import SchemaFile, SchemaSet, load_schema_set
-from clinvar_gkm_parquet.spec import Spec, Table, check_compiled, parse_spec
+from gkm_bundle_parquet.errors import CompileError
+from gkm_bundle_parquet.model import BuildInputs
+from gkm_bundle_parquet.roundtrip import rebuild
+from gkm_bundle_parquet.schemas import SchemaFile, SchemaSet, load_schema_set
+from gkm_bundle_parquet.spec import Spec, Table, check_compiled, parse_spec
 
 SCHEMAS = load_schema_set(str(CLINVAR_SCHEMA))
 COLUMN_SET = load_column_set(str(CLINVAR_COLUMNS))

@@ -17,7 +17,7 @@ picks the record source and runs the engine:
   (compiled.reader_rules): the pairing's version property, if any, and its sections (ADR 0008 decision 4.1,
   ADR 0009).
 - **Provenance.** `driver`, `where` and `ids_sha256` (select.ids_sha256 of the explicit keys, or null) join the
-  engine's parameters in `SelectionResult.metadata_json()`, the `clinvar_gkm_parquet.selection` entry.
+  engine's parameters in `SelectionResult.metadata_json()`, the `gkm_bundle_parquet.selection` entry.
 
 A build with no driver never calls into this module beyond checking that no selection option was given: the full
 build is untouched.
@@ -41,7 +41,8 @@ from .model import BuildInputs, InputFile, StreamedBundle
 from .select import SelectionError, SelectionResult
 from .spec import Spec, Table
 
-SELECTION_BUNDLE_NAME = "clinvar-gkm_selection.json.gz"  # the mini-bundle a build writes in its work directory
+# The mini-bundle a build writes in its work directory.
+SELECTION_BUNDLE_NAME = "gkm-bundle-parquet_selection.json.gz"
 
 
 @dataclass(frozen=True)
@@ -283,7 +284,7 @@ def run_selection(
 
 
 def run_select_command(args) -> int:
-    """`clinvar-gkm-parquet select`: write only the mini-bundle, and print the selection entry a build from it
+    """`gkm-bundle-parquet select`: write only the mini-bundle, and print the selection entry a build from it
     would carry. The same inputs and options give the same bytes."""
     spec, _ = build.resolve_pairing(args)  # a bad pairing is reported before the bundle is touched
     drv = driver_from_args(args)

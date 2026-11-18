@@ -18,10 +18,10 @@ from _input_helpers import (
     write_gz,
 )
 
-from clinvar_gkm_parquet import bundle as bundle_mod
-from clinvar_gkm_parquet.bundle import SectionWriter, canonical_key, stage_bundle, stream_bundle
-from clinvar_gkm_parquet.errors import BundleFormatError, InputError, SchemaVersionError
-from clinvar_gkm_parquet.sources import resolve_input
+from gkm_bundle_parquet import bundle as bundle_mod
+from gkm_bundle_parquet.bundle import SectionWriter, canonical_key, stage_bundle, stream_bundle
+from gkm_bundle_parquet.errors import BundleFormatError, InputError, SchemaVersionError
+from gkm_bundle_parquet.sources import resolve_input
 
 # ---------------------------------------------------------------------------------------------------------------
 # The fixture (positive)

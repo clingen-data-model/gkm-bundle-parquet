@@ -18,9 +18,9 @@ import pytest
 import yaml
 from _tables_helpers import connect, read_fixture, rows
 
-from clinvar_gkm_parquet import sqltemplate
-from clinvar_gkm_parquet.errors import SpecError
-from clinvar_gkm_parquet.spec import Spec, check_compiled, parse_spec
+from gkm_bundle_parquet import sqltemplate
+from gkm_bundle_parquet.errors import SpecError
+from gkm_bundle_parquet.spec import Spec, check_compiled, parse_spec
 
 CUSTOM = Path(__file__).parent / "fixtures" / "custom-spec" / "tables.yaml"
 

@@ -162,12 +162,12 @@ To rerun after clinvar-gkm #202 (`S` a scratch directory, `B` the relabelled del
 uv run python scripts/vendor-git-schemas.py ~/Development/gks/clinvar-gks main \
     schema/clinvar-gkm/clinvar-gkm-bundle.schema.json $S/schema-set
 P="--bundle-schema $S/schema-set --version-property schema_version"
-uv run clinvar-gkm-parquet generate $P -o $S/c.columns.yaml 2> $S/c.report.txt
-uv run clinvar-gkm-parquet build --full $B $P --out $S/c1 && uv run clinvar-gkm-parquet build --full $B $P --out $S/c2
+uv run gkm-bundle-parquet generate $P -o $S/c.columns.yaml 2> $S/c.report.txt
+uv run gkm-bundle-parquet build --full $B $P --out $S/c1 && uv run gkm-bundle-parquet build --full $B $P --out $S/c2
 (cd $S/c1 && shasum -a 256 *) | diff - <(cd $S/c2 && shasum -a 256 *) && echo byte-identical
-uv run clinvar-gkm-parquet verify $S/c1 --bundle-recompute --roundtrip --full $B $P
-uv run clinvar-gkm-parquet rebuild $S/c1 -o $S/c-rebuilt.json.gz
-uv run clinvar-gkm-parquet validate $B $P
+uv run gkm-bundle-parquet verify $S/c1 --bundle-recompute --roundtrip --full $B $P
+uv run gkm-bundle-parquet rebuild $S/c1 -o $S/c-rebuilt.json.gz
+uv run gkm-bundle-parquet validate $B $P
 ```
 
 ## 7. Phase 4 — ClinVar-GKM switches (its repository)

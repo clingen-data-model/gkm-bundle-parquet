@@ -15,9 +15,7 @@ the bundle it came from ([ADR 0001](https://github.com/clingen-data-model/gkm-bu
 > `clinvar-gkm-parquet` release, deprecated: the ClinVar-GKM default bundle, its release model and its fixed table specs
 > ([ADR 0008](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md),
 > [ADR 0009](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0009-generic-gkm-bundle-tool-renamed.md)).
-> See [Migrating from 1.x](#migrating-from-1x). On `main` the removals are in and the rename is not yet: it comes last, so
-> until then the package, the command and the key-value prefix keep the 1.x name, `clinvar-gkm-parquet`, as the examples
-> below do.
+> See [Migrating from 1.x](#migrating-from-1x). On `main` the removals and the rename are in.
 
 ## Versioning
 
@@ -59,14 +57,14 @@ JSON-equal.
 `version --json` gives the same: `tool_version`, `table_spec`, `table_spec_version`, `schema_version_rule`, the key-value
 prefix it writes (`kv_prefix`), the DuckDB version and `validate`'s engines.
 
-Each Parquet file records, in its key-value metadata (prefix `clinvar_gkm_parquet.`, `gkm_bundle_parquet.` after the
-rename), the tool version, the spec's name and
+Each Parquet file records, in its key-value metadata (prefix `gkm_bundle_parquet.`; 1.x wrote `clinvar_gkm_parquet.`),
+the tool version, the spec's name and
 version, the policy version, whether the column set is the default or a projection (and its name), the table's foreign
 keys, the sha256 of the schema set, the column set and the compiled spec, the source bundle's sha256, for a lossless
 build its section's records sha256 and, for a selective build, the selection
 ([design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md#72-key-value-metadata-every-file)
 §7.2). A set also holds its compiled spec (`table-spec.json`), so `verify` and `rebuild` need neither the schema nor the
-column set. They also read sets built by 1.x with `sections`.
+column set. They also read sets built by 1.x with `sections`, under either key-value prefix.
 
 ## Install
 
@@ -97,49 +95,49 @@ P="--bundle-schema https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/clinvar-gkm
    --version-property schema_version"
 
 # The schema's default column set, written out, with a report of what the policy settled (docs/generate.md)
-clinvar-gkm-parquet generate $P -o clinvar-gkm.columns.yaml
+gkm-bundle-parquet generate $P -o clinvar-gkm.columns.yaml
 # Whether a column set is the default (exit 0) or how it differs (exit 1)
-clinvar-gkm-parquet generate --check --bundle-schema clinvar-gkm-1.1.0/schema-set --column-set my.columns.yaml
+gkm-bundle-parquet generate --check --bundle-schema clinvar-gkm-1.1.0/schema-set --column-set my.columns.yaml
 
 # One table per bundle collection, a typed column per record property
-clinvar-gkm-parquet build --full clinvar-gkm_2026-1018.json.gz $P --out out/
+gkm-bundle-parquet build --full clinvar-gkm_2026-1018.json.gz $P --out out/
 
 # A bundle by URL, with its expected sha256
-clinvar-gkm-parquet build --full https://example.org/bundle.json.gz --sha256 <hex> $P --out out/
+gkm-bundle-parquet build --full https://example.org/bundle.json.gz --sha256 <hex> $P --out out/
 
 # A selection: one submitter and every record that points to it (its SCVs)
-clinvar-gkm-parquet build --full clinvar-gkm_2026-1018.json.gz $P --out omim/ \
+gkm-bundle-parquet build --full clinvar-gkm_2026-1018.json.gz $P --out omim/ \
     --driver submitter --where "name = 'OMIM'" --follow in --max-depth 1
 
 # The same selection's mini-bundle only (byte-identical to the one the build used)
-clinvar-gkm-parquet select --full clinvar-gkm_2026-1018.json.gz $P --out omim.json.gz \
+gkm-bundle-parquet select --full clinvar-gkm_2026-1018.json.gz $P --out omim.json.gz \
     --driver submitter --where "name = 'OMIM'" --follow in --max-depth 1
 
 # A CIViC bundle: no version, pretty-printed, empty collections and root values
-clinvar-gkm-parquet build --full civic-assertion-bundle.json --bundle-schema civic/schema-set --out civic/
+gkm-bundle-parquet build --full civic-assertion-bundle.json --bundle-schema civic/schema-set --out civic/
 # The same with a named projection: the column set narrows the default and says `projection: <name>`
-clinvar-gkm-parquet build --full civic-assertion-bundle.json \
+gkm-bundle-parquet build --full civic-assertion-bundle.json \
     --bundle-schema civic/schema-set --column-set civic/civic.columns.yaml --out civic-projection/
 
 # The columns a pairing gives, with no build
-clinvar-gkm-parquet compile-spec $P > sections.yaml
+gkm-bundle-parquet compile-spec $P > sections.yaml
 
 # Back from Parquet to the bundle: a full build rebuilds the bundle's records (no schema needed)
-clinvar-gkm-parquet rebuild out/ -o clinvar-gkm_2026-1018.json.gz
+gkm-bundle-parquet rebuild out/ -o clinvar-gkm_2026-1018.json.gz
 
 # Validate every record against the bundle's JSON Schema set (the default engine, jsonschema-rs; docs/validate.md)
-clinvar-gkm-parquet validate clinvar-gkm-delta_2026-1031.json.gz --bundle-schema clinvar-gkm-1.1.0/schema-set \
+gkm-bundle-parquet validate clinvar-gkm-delta_2026-1031.json.gz --bundle-schema clinvar-gkm-1.1.0/schema-set \
     --version-property schema_version --failures bad.jsonl
 # The same with the GKM Toolkit's validator, the reference the default is checked against (much slower)
-clinvar-gkm-parquet validate clinvar-gkm-delta_2026-1031.json.gz --bundle-schema clinvar-gkm-1.1.0/schema-set \
+gkm-bundle-parquet validate clinvar-gkm-delta_2026-1031.json.gz --bundle-schema clinvar-gkm-1.1.0/schema-set \
     --version-property schema_version --engine python
 
 # Checks: the directory on its own; a full build against its bundle; a selection against its mini-bundle;
 # the round trip (the rebuilt records against the recorded records sha256s and, with --full, the bundle's own)
-clinvar-gkm-parquet verify out/
-clinvar-gkm-parquet verify out/ --bundle-recompute --full clinvar-gkm_2026-1018.json.gz $P
-clinvar-gkm-parquet verify omim/ --bundle-recompute --full omim.json.gz
-clinvar-gkm-parquet verify out/ --roundtrip --full clinvar-gkm_2026-1018.json.gz
+gkm-bundle-parquet verify out/
+gkm-bundle-parquet verify out/ --bundle-recompute --full clinvar-gkm_2026-1018.json.gz $P
+gkm-bundle-parquet verify omim/ --bundle-recompute --full omim.json.gz
+gkm-bundle-parquet verify out/ --roundtrip --full clinvar-gkm_2026-1018.json.gz
 ```
 
 `build`, `select`, `compile-spec`, `generate` and `validate` without `--bundle-schema` stop with exit 2 and say so, and so
@@ -184,12 +182,13 @@ and the [design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/b
 ## Migrating from 1.x
 
 2.0.0 removes what 1.1.0 deprecated. The values of a `sections` build with a pairing don't change. What does: the
-key-value prefix (`gkm_bundle_parquet.` for `clinvar_gkm_parquet.`), the `tool_version` entry, the manifest's `builder`
-and, where 1.1.0 read a release from an option or a published file name, the `source_release` entry, now always empty;
-and, with the record-identical round trip ([docs/round-trip.md](docs/round-trip.md)), the table spec version (`sections`
-2.0), the column order of the tables a column set's `key_order` named (now schema order, as every other table), and the
-recorded sha256s (`section_records_sha256` and `records_sha256` for the text sha256s). See the
-[changelog](CHANGELOG.md) for the manifest fields.
+key-value prefix (`gkm_bundle_parquet.` for `clinvar_gkm_parquet.`; `verify` and `rebuild` read both), the
+`tool_version` entry, the manifest's `builder` and, where 1.1.0 read a release from an option or a published file name,
+the `source_release` entry, now always empty; and, with the record-identical round trip
+([docs/round-trip.md](docs/round-trip.md)), the table spec version (`sections` 2.0), the column order of the tables a
+column set's `key_order` named (now schema order, as every other table), and the recorded sha256s
+(`section_records_sha256` and `records_sha256` for the text sha256s). See the [changelog](CHANGELOG.md) for the manifest
+fields.
 
 | 1.x | 2.0.0 |
 | --- | --- |

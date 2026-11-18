@@ -14,10 +14,10 @@ import duckdb
 import pytest
 from _fixture import CLINVAR_COLUMNS, CLINVAR_SCHEMA, FIXTURE, FIXTURES
 
-from clinvar_gkm_parquet.build import KV_PREFIX
-from clinvar_gkm_parquet.cli import main
-from clinvar_gkm_parquet.compiled import compile_default, compile_pairing
-from clinvar_gkm_parquet.compiler import RULES_VERSION
+from gkm_bundle_parquet.build import KV_PREFIX
+from gkm_bundle_parquet.cli import main
+from gkm_bundle_parquet.compiled import compile_default, compile_pairing
+from gkm_bundle_parquet.compiler import RULES_VERSION
 
 NARROWED = FIXTURES / "schema-sets" / "clinvar-gkm-narrowed-a956b5a"
 EXCERPT_1031 = FIXTURES / "real-1.1.0-1031" / "clinvar-gkm_excerpt.json.gz"

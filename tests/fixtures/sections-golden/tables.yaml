@@ -1,8 +1,8 @@
 # Golden: what the sections compiler must reproduce on bundle schema 1.1.0. tests/test_compiler.py compares every table
 # of the compiled spec with this file. It is not what a build loads: `sections` is compiled from the bundle's schema set
-# (src/clinvar_gkm_parquet/compiler.py, ADR 0006). It was the hand-researched spec file until then, and is kept as the
+# (src/gkm_bundle_parquet/compiler.py, ADR 0006). It was the hand-researched spec file until then, and is kept as the
 # independent statement of the 1.1.0 tables; its text below is what that research found. Format:
-# src/clinvar_gkm_parquet/spec.py.
+# src/gkm_bundle_parquet/spec.py.
 #
 # status: draft. ClinVar-GKM defines the columns: they are the superset of the properties, and of the value
 # shapes, that the ClinVar-GKM producer emits for each section under bundle schema_version 1.1.0 (procedures,

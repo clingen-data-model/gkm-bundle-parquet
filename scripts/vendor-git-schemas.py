@@ -29,8 +29,8 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-from clinvar_gkm_parquet.errors import ToolError
-from clinvar_gkm_parquet.schemas import MANIFEST, _closure, read_set
+from gkm_bundle_parquet.errors import ToolError
+from gkm_bundle_parquet.schemas import MANIFEST, _closure, read_set
 
 
 def _git(repo: Path, *args: str) -> bytes:

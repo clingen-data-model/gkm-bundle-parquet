@@ -672,7 +672,7 @@ class _Out:
 def _shared_kv(kvs: dict[str, dict[str, str]], key: str) -> str | None:
     values = {kv.get(key) for kv in kvs.values()}
     if len(values) != 1:
-        raise RoundTripError(f"the files disagree on clinvar_gkm_parquet.{key}: they are not one build")
+        raise RoundTripError(f"the files disagree on gkm_bundle_parquet.{key}: they are not one build")
     return values.pop()
 
 
@@ -727,7 +727,7 @@ def rebuild(
     if extra:
         raise RoundTripError(f"{out_dir}: file(s) of no table of spec {spec.label}: {', '.join(extra)}")
     if any("selection" in kv for kv in kvs.values()):
-        raise RoundTripError(f"{out_dir}: a selective build (clinvar_gkm_parquet.selection) is not a whole bundle")
+        raise RoundTripError(f"{out_dir}: a selective build (gkm_bundle_parquet.selection) is not a whole bundle")
     if _shared_kv(kvs, "source_deltas") != "[]":
         raise RoundTripError(
             f"{out_dir}: built by 1.x with deltas replayed: the tables hold a state no one bundle holds"
@@ -736,7 +736,7 @@ def rebuild(
     unrecorded = [n for n, kv in kvs.items() if "section_records_sha256" not in kv]
     if unrecorded and not legacy:
         raise RoundTripError(
-            f"{out_dir}: {', '.join(sorted(unrecorded)[:5])} carry no clinvar_gkm_parquet.section_records_sha256: "
+            f"{out_dir}: {', '.join(sorted(unrecorded)[:5])} carry no gkm_bundle_parquet.section_records_sha256: "
             "not a lossless build (a selection or a build with deltas records none)"
         )
     for k in ("tool_version", "table_spec", "table_spec_version", "bundle_schema_version", "source_bundle_sha256"):
@@ -781,7 +781,7 @@ def rebuild(
         tmp = out.with_name(f".{out.name}.{os.getpid()}.partial")
     if work_dir is not None:
         Path(work_dir).mkdir(parents=True, exist_ok=True)  # as the bundle recompute makes it
-    spill = Path(tempfile.mkdtemp(prefix="clinvar-gkm-parquet-rebuild-", dir=work_dir))
+    spill = Path(tempfile.mkdtemp(prefix="gkm-bundle-parquet-rebuild-", dir=work_dir))
     con = duckdb.connect()
     hasher = Hasher(workers)
     try:
@@ -1008,7 +1008,7 @@ def verify_roundtrip(
             spec = spec_for_dir(con, Path(out_dir))
         finally:
             con.close()
-        work = Path(tempfile.mkdtemp(prefix="clinvar-gkm-parquet-roundtrip-", dir=work_dir))
+        work = Path(tempfile.mkdtemp(prefix="gkm-bundle-parquet-roundtrip-", dir=work_dir))
         try:
             with Hasher(workers) as hasher:
                 src = bundle_records(inp, spec, work, hasher, memory_limit=memory_limit, threads=threads)
@@ -1039,14 +1039,14 @@ def verify_roundtrip(
 
 
 def run_rebuild_command(args) -> int:
-    """`clinvar-gkm-parquet rebuild`: write the bundle back; prints its records sha256."""
+    """`gkm-bundle-parquet rebuild`: write the bundle back; prints its records sha256."""
     result = rebuild(
         args.dir,
         args.out,
         memory_limit=args.memory_limit,
         threads=args.threads,
         work_dir=args.work_dir,
-        log=lambda m: print(f"clinvar-gkm-parquet: {m}", file=sys.stderr, flush=True),
+        log=lambda m: print(f"gkm-bundle-parquet: {m}", file=sys.stderr, flush=True),
     )
     total = sum(result.sections.values())
     if result.checked:

@@ -38,6 +38,7 @@ from .build import (
     table_groups,
 )
 from .bundle import ROOT_VALUES_TABLE
+from .compat import LEGACY_KV_PREFIX
 from .compiled import compile_default, compile_pairing, is_recorded, recorded_spec
 from .errors import InputError, SpecError
 from .model import BuildInputs
@@ -60,19 +61,23 @@ def _pq(path: Path) -> str:
 
 
 def read_kv(con: duckdb.DuckDBPyConnection, path: Path) -> dict[str, str]:
-    """The clinvar_gkm_parquet.* key-value metadata of one file, prefix removed."""
+    """The tool's key-value metadata of one file, prefix removed: KV_PREFIX, or LEGACY_KV_PREFIX in a file written
+    under the tool's former name (1.x; ADR 0009 decision 3). A file with both is no file this tool wrote."""
     rows = con.execute(f"SELECT key, value FROM parquet_kv_metadata({sql_str(str(path))})").fetchall()
-    out = {}
+    out: dict[str, dict[str, str]] = {}
     for k, v in rows:
         k = k.decode() if isinstance(k, bytes) else k
         v = v.decode() if isinstance(v, bytes) else v
-        if k.startswith(KV_PREFIX):
-            out[k[len(KV_PREFIX) :]] = v
-    return out
+        for prefix in (KV_PREFIX, LEGACY_KV_PREFIX):
+            if k.startswith(prefix):
+                out.setdefault(prefix, {})[k[len(prefix) :]] = v
+    if len(out) > 1:
+        raise SpecError(f"{path}: key-value metadata under both {KV_PREFIX} and {LEGACY_KV_PREFIX}")
+    return out.popitem()[1] if out else {}
 
 
 def dir_kv(con: duckdb.DuckDBPyConnection, out_dir: Path) -> dict[str, dict[str, str]]:
-    """file name -> its clinvar_gkm_parquet.* key-value metadata, for every .parquet in the directory."""
+    """file name -> its key-value metadata (read_kv), for every .parquet in the directory."""
     return {p.name: read_kv(con, p) for p in sorted(Path(out_dir).glob("*.parquet"))}
 
 
@@ -135,11 +140,11 @@ def pairing_problems(
 
 
 def dir_selection(kvs: dict[str, dict[str, str]]) -> str | None:
-    """The files' clinvar_gkm_parquet.selection entry (ADR 0004): None for a full build. Files that disagree
+    """The files' gkm_bundle_parquet.selection entry (ADR 0004): None for a full build. Files that disagree
     (some with one, some without, or different ones) are an error: one directory holds one set."""
     values = {kv.get("selection") for kv in kvs.values()}
     if len(values) > 1:
-        raise SpecError("the files disagree on clinvar_gkm_parquet.selection: they are not one set")
+        raise SpecError("the files disagree on gkm_bundle_parquet.selection: they are not one set")
     return values.pop() if values else None
 
 
@@ -450,7 +455,7 @@ class VerifyReport:
         }
 
     def to_markdown(self) -> str:
-        lines = [f"# clinvar-gkm-parquet verify: {self.dir}", ""]
+        lines = [f"# gkm-bundle-parquet verify: {self.dir}", ""]
         spec = f"{self.spec_name} {self.spec_version}" if self.spec_name else self.spec_version
         subset = ""
         if self.selection is not None:
@@ -515,12 +520,12 @@ def write_report(report: VerifyReport, path: Path) -> tuple[Path, Path]:
 
 
 def _usage(msg: str) -> int:
-    print(f"clinvar-gkm-parquet verify: error: {msg}", file=sys.stderr)
+    print(f"gkm-bundle-parquet verify: error: {msg}", file=sys.stderr)
     return 2
 
 
 def run_verify_command(args) -> int:
-    """`clinvar-gkm-parquet verify`: returns the exit code."""
+    """`gkm-bundle-parquet verify`: returns the exit code."""
     out_dir = Path(args.dir)
     if not out_dir.is_dir():
         return _usage(f"{out_dir}: not a directory")
@@ -548,7 +553,7 @@ def run_verify_command(args) -> int:
             inputs = resolve_build_inputs(args)
         else:
             # A selection is recomputed against its mini-bundle (ADR 0004): `--full` names it, and its sha256
-            # must be the recorded selected_sha256. `clinvar-gkm-parquet select` with the recorded options
+            # must be the recorded selected_sha256. `gkm-bundle-parquet select` with the recorded options
             # regenerates it byte for byte.
             expected = params["selected_sha256"]
             if args.sha256 and args.sha256.lower() != expected:
@@ -562,7 +567,7 @@ def run_verify_command(args) -> int:
                 work_dir=args.work_dir,
                 memory_limit=args.memory_limit,
                 threads=args.threads,
-                log=lambda m: print(f"clinvar-gkm-parquet: {m}", file=sys.stderr, flush=True),
+                log=lambda m: print(f"gkm-bundle-parquet: {m}", file=sys.stderr, flush=True),
             )
         except InputError as e:
             if params is not None and "sha256 mismatch" in str(e):

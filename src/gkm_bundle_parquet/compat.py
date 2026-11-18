@@ -15,9 +15,10 @@ from .compiler import RULES_VERSION, SPEC_NAME
 
 # The one table spec (ADR 0006): compiled from a bundle schema and its column set, not read from a file.
 COMPILED_SPEC = SPEC_NAME
-KV_PREFIX = (
-    "clinvar_gkm_parquet."  # of every key-value entry a build writes; a rename here changes the files' bytes
-)
+# The prefix of every key-value entry a build writes; a change here changes the files' bytes.
+KV_PREFIX = "gkm_bundle_parquet."
+# The prefix sets written under the tool's former name carry (1.x): verify and rebuild read it too (ADR 0009).
+LEGACY_KV_PREFIX = "clinvar_gkm_parquet."
 
 SCHEMA_VERSION_RULE = (
     "Reads any bundle whose schema (--bundle-schema) and column set (--column-set) load and compile into the "

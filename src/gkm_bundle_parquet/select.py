@@ -23,7 +23,7 @@ Integration API:
   listed is not followed and is not dangling; the record that holds it keeps it in its bytes. Every seed
   section must be listed.
 - `provenance` holds the fields only integration knows (`driver`, `where`, `ids_sha256`); they are merged into
-  SelectionResult.parameters, which integration writes as the `clinvar_gkm_parquet.selection` Parquet key-value
+  SelectionResult.parameters, which integration writes as the `gkm_bundle_parquet.selection` Parquet key-value
   entry (SELECTION_METADATA_KEY; canonical JSON from SelectionResult.metadata_json()) and into the manifest.
 
 How it runs (streaming and multi-pass; memory holds the selected keys and the pending pointers, never records;
@@ -181,7 +181,7 @@ class SelectionResult:
         return sum(self.section_counts.values())
 
     def metadata_json(self) -> str:
-        """The value of the `clinvar_gkm_parquet.selection` key-value entry: canonical JSON, no timestamps."""
+        """The value of the `gkm_bundle_parquet.selection` key-value entry: canonical JSON, no timestamps."""
         return canonical_json(self.parameters)
 
 

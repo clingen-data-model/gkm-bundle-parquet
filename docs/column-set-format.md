@@ -21,10 +21,10 @@ column set (`tests/fixtures/clinvar-gkm/1.1.0/columns.yaml`, projection `clinvar
 producer's column set ([ADR 0009](decisions/0009-generic-gkm-bundle-tool-renamed.md)).
 
 ```sh
-clinvar-gkm-parquet build --bundle-schema my.schema.json --full my-bundle.json --out out/        # the default
-clinvar-gkm-parquet generate --bundle-schema my.schema.json -o default.columns.yaml             # write it out
-clinvar-gkm-parquet generate --check --bundle-schema my.schema.json --column-set my.columns.yaml  # is it the default?
-clinvar-gkm-parquet build --bundle-schema my.schema.json --column-set my.columns.yaml --full my-bundle.json --out out/
+gkm-bundle-parquet build --bundle-schema my.schema.json --full my-bundle.json --out out/        # the default
+gkm-bundle-parquet generate --bundle-schema my.schema.json -o default.columns.yaml             # write it out
+gkm-bundle-parquet generate --check --bundle-schema my.schema.json --column-set my.columns.yaml  # is it the default?
+gkm-bundle-parquet build --bundle-schema my.schema.json --column-set my.columns.yaml --full my-bundle.json --out out/
 ```
 
 ## A small example
@@ -117,7 +117,7 @@ parts, has the single slot `value_json` (its JSON text). Each element fills only
 A pointer with a declared target, from a schema `pattern` (`^#/<section>/` or `^#/(a|b)/`) or a `->` shape, is a
 foreign key. The compiled spec lists each table's foreign keys (`foreign_keys`: the position, the target sections and,
 with several targets, where the section is), in `table-spec.json` and in each file's key-value metadata
-(`clinvar_gkm_parquet.foreign_keys`). An IRI (`iri`, or `format: iri-reference` with no pattern) is not a foreign key.
+(`gkm_bundle_parquet.foreign_keys`). An IRI (`iri`, or `format: iri-reference` with no pattern) is not a foreign key.
 
 ## The rules the compile enforces
 

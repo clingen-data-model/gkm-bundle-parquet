@@ -12,7 +12,7 @@ import hashlib
 
 import pytest
 
-from clinvar_gkm_parquet.canonical import (
+from gkm_bundle_parquet.canonical import (
     EMPTY_SHA256,
     CanonicalError,
     Hasher,

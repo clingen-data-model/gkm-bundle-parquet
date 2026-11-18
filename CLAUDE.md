@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-Project-wide invariants for gkm-bundle-parquet (renamed from clinvar-gkm-parquet 2026-11-16; the package, CLI and PyPI
-project keep the old name until the rename in 2.0.0, ADR 0009). Keep this file short (under about 120 lines) and
+Project-wide invariants for gkm-bundle-parquet (named clinvar-gkm-parquet through 1.x; the repository was renamed
+2026-11-16, and the package, CLI and PyPI project in 2.0.0, ADR 0009). Keep this file short (under about 120 lines) and
 limited to things that are true across the whole repo. Path-specific conventions live in `.claude/rules/` (loaded only
 when working on matching files); one-off decisions live in `docs/decisions/` (ADRs). Change this file via PR review.
 
@@ -50,7 +50,8 @@ See [ADR 0002](docs/decisions/0002-independent-tool-versioning.md). In short:
   compile is refused (ADR 0006), and the matrix lists no producer's versions (ADR 0009). The matrix lives in `README.md`
   and in `version --json`; keep both in sync.
 - Each Parquet file records the tool version, the table-spec version, the source bundle sha256 and the sha256 of its
-  schema set, column set and compiled spec in its key-value metadata (prefix `clinvar_gkm_parquet.` until the rename).
+  schema set, column set and compiled spec in its key-value metadata (prefix `gkm_bundle_parquet.`; `verify` and
+  `rebuild` also read 1.x's `clinvar_gkm_parquet.`).
 
 ## Testing and verification
 

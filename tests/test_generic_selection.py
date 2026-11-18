@@ -19,8 +19,8 @@ import pytest
 from _fixture import FIXTURE, FIXTURES
 from _fixture import PAIRING as CLINVAR_PAIRING
 
-from clinvar_gkm_parquet.build import KV_PREFIX
-from clinvar_gkm_parquet.cli import main
+from gkm_bundle_parquet.build import KV_PREFIX
+from gkm_bundle_parquet.cli import main
 
 CIVIC = FIXTURES / "civic"
 CIVIC_PAIRING = ("--bundle-schema", CIVIC / "schema-set", "--column-set", CIVIC / "civic.columns.yaml")

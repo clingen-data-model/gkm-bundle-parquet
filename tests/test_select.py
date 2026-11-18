@@ -17,10 +17,10 @@ from pathlib import Path
 import pytest
 from _fixture import FIXTURE, SECTIONS, strict_rules
 
-from clinvar_gkm_parquet import select as sel
-from clinvar_gkm_parquet.bundle import stage_bundle
-from clinvar_gkm_parquet.errors import BundleFormatError, InputError, SchemaVersionError
-from clinvar_gkm_parquet.model import InputFile
+from gkm_bundle_parquet import select as sel
+from gkm_bundle_parquet.bundle import stage_bundle
+from gkm_bundle_parquet.errors import BundleFormatError, InputError, SchemaVersionError
+from gkm_bundle_parquet.model import InputFile
 
 Node = tuple[str, str]
 
@@ -394,7 +394,7 @@ def test_parameters_and_metadata(tmp_path):
         "selected_sha256": result.sha256,
     }
     assert json.loads(result.metadata_json()) == p
-    assert sel.SELECTION_METADATA_KEY == "clinvar_gkm_parquet.selection"
+    assert sel.SELECTION_METADATA_KEY == "gkm_bundle_parquet.selection"
     assert sel.ids_sha256(["b", "a", "a"]) == hashlib.sha256(b"a\nb\n").hexdigest()
     with pytest.raises(sel.SelectionError, match="set by the engine"):
         run(tmp_path, {"vcv": [key]}, name="x.json.gz", provenance={"follow": "in"})

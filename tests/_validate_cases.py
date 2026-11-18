@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from _fixture import FIXTURE, FIXTURES
 from _input_helpers import fixture_sections
 
-from clinvar_gkm_parquet.bundle import decode_key
-from clinvar_gkm_parquet.schemas import SchemaSet
+from gkm_bundle_parquet.bundle import decode_key
+from gkm_bundle_parquet.schemas import SchemaSet
 
 VERSION = "1.1.0"
 UNDECLARED = "notInTheSchema"

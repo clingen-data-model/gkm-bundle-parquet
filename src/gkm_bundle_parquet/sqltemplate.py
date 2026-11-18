@@ -83,7 +83,7 @@ _SCALARS = {"varchar", "bigint", "boolean", "date", "integer", "double"}
 
 
 def _sql_text(name: str) -> str:
-    return resources.files("clinvar_gkm_parquet").joinpath("sql", name).read_text(encoding="utf-8")
+    return resources.files("gkm_bundle_parquet").joinpath("sql", name).read_text(encoding="utf-8")
 
 
 def macros_sql() -> str:
