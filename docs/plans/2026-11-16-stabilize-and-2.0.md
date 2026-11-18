@@ -118,6 +118,58 @@ with every open branch.
   requires all 19 root properties. The fix changes validation, so it reruns the engine-equivalence evidence
   ([validate.md](../validate.md)).
 
+### State (2026-11-18)
+
+| Step / item | State |
+| --- | --- |
+| 1. Record-identical round trip | Done, #26 (`7917c15`) |
+| 2. Default generated from the schema | Done, #28 (`326749d`) |
+| 3. Removals | Done, #24 (`10f0630`) |
+| Default DuckDB memory limit (§5) | Done in #24: `build.default_memory_limit()`, half the memory the process may use (physical, or the cgroup limit when lower). Every connection that runs section SQL goes through `build.configure` (`build`, `select`, `verify --bundle-recompute`/`--roundtrip`, `rebuild`); the others read only Parquet metadata or write the small root-values table. `validate`, `generate` and `compile-spec` run no DuckDB. Tested (`tests/test_memory_limit.py`), documented (README, CHANGELOG Unreleased, `--memory-limit` help). Checked 2026-11-18, no change needed |
+| `validate` failed every CIViC record | Fixed by #27 (`a304fd7`); its engine-equivalence rerun is in [validate.md](../validate.md). Checked 2026-11-18 on `326749d`: both engines pass both CIViC bundles (30 and 23 records), both ClinVar-GKM excerpts against the 1.1.0 and narrowed sets, and the pretty-printed sub-bundle, 0 failing. #24 changed only the version-property default after #27; the evidence passes `--version-property` explicitly, so no rerun |
+| w3id 1.1.0 schema-set sha256 (`0340922…` against `741a29f…`) | Diagnosed (below). Open: the docs part of step 5 |
+| Generated default on ClinVar-GKM's 1.2.0 schema | Run 2026-11-18 (below); rerun after clinvar-gkm #202 |
+| 4. Rename | Left (#21, its own session) |
+| 5. Docs, changelog, matrix; full-size check; release | Left |
+
+**w3id 1.1.0.** w3id resolves `…/clinvar-gkm/1.1.0/…` to `raw.githubusercontent.com/clingen-data-model/clinvar-gkm/1.1.0/…`,
+the tag. At the tag the root's `$id` is `https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/json/ClinvarGkmBundle` (root
+sha256 `48369c69…`, set `03409226…`); the fixture's root carries the `$id` corrected after the tag (`…/1.1.0/clinvar-gkm-bundle.schema.json`,
+set `741a29f…`). That line is the only difference (the opt-in network test passes, 2026-11-18). The tool accepts a root
+whose `$id` differs from its URL by design (schemas.py: the `$id` is the set's key). So the served set loads, and
+`generate` from the URL works and writes `schema: …/json/ClinvarGkmBundle`; only a column set naming the corrected `$id`
+is refused, with "it says it pairs with schema …, but the schema's $id is …". The corrected `$id` first ships at
+clinvar-gkm's 1.2.0 tag, not yet cut (`…/1.2.0/…` is 404 on 2026-11-18; clinvar-gkm `main` @ `e7308f0` has it). For step 5:
+document that a producer passes a tag whose root `$id` is its URL (ClinVar-GKM 1.2.0 or later) or a schema-set
+directory, and that a pairing check names both `$id`s. Still to check: whether the pairing-refusal message should also
+say the root was read from a URL other than its `$id`.
+
+**1.2.0 evidence** (2026-11-18, tool `326749d`; another session's run, spot-checked here). Schema: clinvar-gkm `main` @
+`e7308f0`, vendored with `scripts/vendor-git-schemas.py`: 143 files, schema set sha256 `3e405fb32401016da90be2deff8c0960660cee44336f4f505a8849a521412e40`.
+Bundle: the 2026-10-31 delta (`443178d9…`) with line 2 relabelled `1.2.0` (sha256 `a326fc0ddc94463029baa908d91c923a59722c949f22e94573f42f1a6e46a12c`).
+
+- `generate`: the column set equals the a956b5a one apart from its schema URL.
+- `build` with no column set, twice: 20 tables; the 21 checksummed files of the two builds are byte-identical.
+- `rebuild`: record-identical; records sha256 `1ff1c2dbe58c8f0ef72e9a84c3178be1c0b0b74f97e8f86e6a7d5fc83185bc7c`. It differs
+  from a956b5a's only because the root line holds `schema_version`; with the label set back to `1.1.0` the bytes equal
+  the a956b5a rebuild.
+- `verify --bundle-recompute --roundtrip --full`: pass (0 problems, 0 groups differ, round trip identical).
+- `validate --engine rs --version-property schema_version`: 0 of 495,547 records fail.
+
+To rerun after clinvar-gkm #202 (`S` a scratch directory, `B` the relabelled delta):
+
+```sh
+uv run python scripts/vendor-git-schemas.py ~/Development/gks/clinvar-gks main \
+    schema/clinvar-gkm/clinvar-gkm-bundle.schema.json $S/schema-set
+P="--bundle-schema $S/schema-set --version-property schema_version"
+uv run clinvar-gkm-parquet generate $P -o $S/c.columns.yaml 2> $S/c.report.txt
+uv run clinvar-gkm-parquet build --full $B $P --out $S/c1 && uv run clinvar-gkm-parquet build --full $B $P --out $S/c2
+(cd $S/c1 && shasum -a 256 *) | diff - <(cd $S/c2 && shasum -a 256 *) && echo byte-identical
+uv run clinvar-gkm-parquet verify $S/c1 --bundle-recompute --roundtrip --full $B $P
+uv run clinvar-gkm-parquet rebuild $S/c1 -o $S/c-rebuilt.json.gz
+uv run clinvar-gkm-parquet validate $B $P
+```
+
 ## 7. Phase 4 — ClinVar-GKM switches (its repository)
 
 This repository doesn't write to ClinVar-GKM's; these are its steps, listed so the order is clear.
