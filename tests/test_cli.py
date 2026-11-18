@@ -16,7 +16,10 @@ def test_version_json(capsys):
     assert "no producer's schema_version is built in" in info["schema_version_rule"]
     for gone in ("snapshotted_schema_versions", "accepted_schema_versions", "table_specs", "tables"):
         assert gone not in info
+    assert info["policy_version"] == RULES_VERSION
+    assert "--column-set" in info["schema_version_rule"] and "generated default" in info["schema_version_rule"]
     assert info["kv_prefix"] == "gkm_bundle_parquet."
+    assert info["kv_prefixes_read"] == ["gkm_bundle_parquet.", "clinvar_gkm_parquet."]
     assert info["duckdb_version"] == "1.5.4"
     assert set(info["validate_engines"]) == {"rs", "python"}
 
@@ -24,7 +27,9 @@ def test_version_json(capsys):
 def test_version_text(capsys):
     assert main(["version"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("gkm-bundle-parquet ") and f"table spec sections {RULES_VERSION}; duckdb 1.5.4" in out
+    assert out.startswith("gkm-bundle-parquet ") and f"table spec sections {RULES_VERSION}" in out
+    assert f"policy {RULES_VERSION}; duckdb 1.5.4" in out
+    assert "key-value prefix gkm_bundle_parquet. (reads also clinvar_gkm_parquet.)" in out
 
 
 @pytest.mark.parametrize(

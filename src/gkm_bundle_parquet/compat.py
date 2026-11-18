@@ -1,9 +1,10 @@
 """The compatibility data: what this tool release reads and writes. The source of `version --json`.
 
-Keep in sync with the matrix in README.md (ADR 0002, amended by ADR 0003, ADR 0006 and ADR 0009; the release-tool
-skill updates both). No producer's schema_version is listed: the one table spec, `sections`, is compiled from the
-bundle's schema and its column set, so the tool reads any bundle whose schema and column set load and compile
-(ADR 0009, row 0002).
+Keep in sync with the matrix in README.md (ADR 0002, amended by ADR 0006, ADR 0008 and ADR 0009; the release-tool
+skill updates both). No producer's schema_version is listed: the one table spec, `sections`, is compiled from
+the bundle's schema (its generated default, ADR 0007) or the schema and a column set, so the tool reads any bundle
+whose pairing loads and compiles. A release states its table-spec and policy versions (ADR 0007 and ADR 0009, each
+on row 0002), the key-value prefix it writes and the prefixes it reads.
 """
 
 from __future__ import annotations
@@ -20,10 +21,14 @@ KV_PREFIX = "gkm_bundle_parquet."
 # The prefix sets written under the tool's former name carry (1.x): verify and rebuild read it too (ADR 0009).
 LEGACY_KV_PREFIX = "clinvar_gkm_parquet."
 
+# What verify and rebuild read: a set's key-value entries under either prefix, the one it writes first.
+KV_PREFIXES_READ = (KV_PREFIX, LEGACY_KV_PREFIX)
+
 SCHEMA_VERSION_RULE = (
-    "Reads any bundle whose schema (--bundle-schema) and column set (--column-set) load and compile into the "
-    "sections spec (ADR 0006, ADR 0009); no producer's schema_version is built in. verify and rebuild read the "
-    "spec a build wrote beside its manifest."
+    "Reads any bundle given its schema (--bundle-schema, required): the tables are the schema's generated "
+    "default, or a --column-set that compiles to it or names a projection (ADR 0006, ADR 0007, ADR 0009); no "
+    "producer's schema_version is built in. verify and rebuild read the spec a build wrote beside its manifest, "
+    "including sections sets written by tool 1.x."
 )
 
 
@@ -49,14 +54,17 @@ def validate_engines() -> dict:
 
 
 def version_info() -> dict:
-    """`version --json`: the tool's version, the table spec it writes and the version of the compiler's rules
-    (the spec's version), the key-value prefix it writes, DuckDB's version and validate's engines."""
+    """`version --json`: the tool's version, the table spec it writes, its version and the default policy's (both
+    the compiler's rules version, ADR 0007), the key-value prefix it writes and the ones it reads, DuckDB's version
+    and validate's engines."""
     return {
         "tool_version": __version__,
         "table_spec": COMPILED_SPEC,
         "table_spec_version": RULES_VERSION,
+        "policy_version": RULES_VERSION,
         "schema_version_rule": SCHEMA_VERSION_RULE,
         "kv_prefix": KV_PREFIX,
+        "kv_prefixes_read": list(KV_PREFIXES_READ),
         "duckdb_version": duckdb.__version__,
         "validate_engines": validate_engines(),
     }

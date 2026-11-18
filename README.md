@@ -15,7 +15,7 @@ the bundle it came from ([ADR 0001](https://github.com/clingen-data-model/gkm-bu
 > `clinvar-gkm-parquet` release, deprecated: the ClinVar-GKM default bundle, its release model and its fixed table specs
 > ([ADR 0008](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md),
 > [ADR 0009](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0009-generic-gkm-bundle-tool-renamed.md)).
-> See [Migrating from 1.x](#migrating-from-1x). On `main` the removals and the rename are in.
+> See [Migrating from 1.x](#migrating-from-1x). Everything 2.0.0 holds is on `main`; it is not on PyPI yet.
 
 ## Versioning
 
@@ -36,7 +36,7 @@ it reads.
 | 1.0.0 | any bundle with its pairing; ClinVar-GKM by default (snapshot: 1.1.0); `baseline`, `clinvar-gkm`: ClinVar-GKM 1.1.0 | `sections` 1.0 (default; draft), `baseline` 1.0 (draft), `clinvar-gkm` 1.0 (draft) |
 | 1.0.1 | as 1.0.0 | as 1.0.0 |
 | 1.1.0 | as 1.0.0; the default bundle, `baseline` and `clinvar-gkm` deprecated | as 1.0.0 |
-| 2.0.0 (planned) | any bundle with its schema (required) and, optionally, a column set; no default bundle | `sections` 2.0 (draft; generated default, policy 2.0; no `key_order` or `ordinal`; a record-identical round trip) |
+| 2.0.0 (planned) | any bundle with its schema (required) and, optionally, a column set that is the default or a named projection; no default bundle. `verify` and `rebuild`: `sections` sets of 1.x and 2.0.0, key-value prefix `gkm_bundle_parquet.` or `clinvar_gkm_parquet.` | `sections` 2.0 (draft; generated default, policy 2.0; no `key_order` or `ordinal`; a record-identical round trip), key-value prefix `gkm_bundle_parquet.` |
 
 `sections`: one table per bundle collection (20 in ClinVar-GKM 1.1.0), keyed by `id`, compiled from a bundle schema and,
 optionally, a column set, with every record property its own typed column (named as the property; STRUCTs at any depth;
@@ -54,8 +54,29 @@ sorted), whatever the source's layout, key order or array order ([docs/round-tri
 2.0.0's promise (planned; on `main`); 1.x rebuilds a line-layout bundle's text byte for byte and any other layout
 JSON-equal.
 
-`version --json` gives the same: `tool_version`, `table_spec`, `table_spec_version`, `schema_version_rule`, the key-value
-prefix it writes (`kv_prefix`), the DuckDB version and `validate`'s engines.
+`version --json` gives the same for scripts: `tool_version`; the spec it writes (`table_spec`), its version
+(`table_spec_version`) and the default policy's (`policy_version`); what it reads (`schema_version_rule`); the key-value
+prefix it writes (`kv_prefix`) and the prefixes `verify` and `rebuild` read (`kv_prefixes_read`); the DuckDB version
+(`duckdb_version`); and `validate`'s engines (`validate_engines`). For 2.0.0 (planned; `schema_version_rule` abridged):
+
+```json
+{
+  "tool_version": "2.0.0",
+  "table_spec": "sections",
+  "table_spec_version": "2.0",
+  "policy_version": "2.0",
+  "schema_version_rule": "Reads any bundle given its schema (--bundle-schema, required): ...",
+  "kv_prefix": "gkm_bundle_parquet.",
+  "kv_prefixes_read": ["gkm_bundle_parquet.", "clinvar_gkm_parquet."],
+  "duckdb_version": "1.5.4",
+  "validate_engines": {
+    "rs": {"library": "jsonschema-rs", "version": "0.61.1", "default": true},
+    "python": {"library": "ga4gh.gkm", "version": "0.4.0", "default": false, "extra": "reference"}
+  }
+}
+```
+
+An engine's `version` is `null` when it isn't installed (the `python` engine without the `reference` extra).
 
 Each Parquet file records, in its key-value metadata (prefix `gkm_bundle_parquet.`; 1.x wrote `clinvar_gkm_parquet.`),
 the tool version, the spec's name and
@@ -84,11 +105,12 @@ The default engine needs nothing extra.
 ## Usage
 
 Every command that reads a bundle takes one bundle (`--full`, a path or URL) and its schema, `--bundle-schema` (a schema
-file, a URL, or a schema-set directory). With no `--column-set` the tool builds the schema's generated default, and
-`--version-property` names the root property holding the bundle's version, if any; a `--column-set` (the default written
-out, or a named projection) says it instead. `--sha256` gives the bundle's expected sha256; without it, a
-`<file>.sha256` sidecar is used when there is one. Which release a file is, and which file to read, is the producer's
-business. The examples use ClinVar-GKM's 1.1.0 schema, which ClinVar-GKM publishes with its bundles.
+file, a URL, or a schema-set directory; see [Schema sources](#schema-sources)). With no `--column-set` the tool builds
+the schema's generated default, and `--version-property` names the root property holding the bundle's version, if any;
+a `--column-set` (the default written out, or a named projection) says it instead. `--sha256` gives the bundle's
+expected sha256; without it, a `<file>.sha256` sidecar is used when there is one. Which release a file is, and which
+file to read, is the producer's business. The examples use ClinVar-GKM's 1.1.0 schema and CIViC's, only as examples:
+any producer's bundle and schema work the same way.
 
 ```sh
 P="--bundle-schema https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/clinvar-gkm-bundle.schema.json \
@@ -179,6 +201,40 @@ pairing: its version property, if it has one, and its sections, so a bundle with
 and the [design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md)
 §4.5 and §10.
 
+## Schema sources
+
+`--bundle-schema` takes the bundle's root schema in one of three forms:
+
+- **A URL**, such as the producer's published w3id `$id`
+  (`https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/clinvar-gkm-bundle.schema.json` for ClinVar-GKM 1.1.0). The root
+  and every schema its `$ref`s reach are fetched once and cached (`$XDG_CACHE_HOME/gkm-bundle-parquet/`, else
+  `~/.cache/gkm-bundle-parquet/`).
+- **A local file**: the root schema. The schemas its `$ref`s reach are fetched and cached the same way.
+- **A schema-set directory**: the root and every schema it reaches, one file each, with a `MANIFEST.json`, read with no
+  network. In a source tree, `scripts/vendor-schemas.py <file or URL> <dir>` writes one from a published schema, and
+  `scripts/vendor-git-schemas.py <clone> <commit> <root path> <dir>` from a commit of a local git clone, for a schema
+  that isn't published yet.
+
+From a `$ref` only `https://w3id.org/` URLs are followed (and JSON pointers within a file); the root itself can be
+anywhere. Whatever the form, a set is known by the `$id` its root declares, not by where it was read from, and by
+`schema_set_sha256` (over each `$id` and its bytes), which every Parquet file and the manifest record. A column set pairs
+with that `$id`. To pin the schema a build used, keep that sha256, or vendor the set into a directory.
+
+**A w3id URL resolves only once its producer has tagged that version.** w3id sends a producer's versioned `$id` to the
+file at the producer's git tag for that version. So a version that isn't tagged yet doesn't resolve (HTTP 404), even
+when its files are on the producer's default branch: ClinVar-GKM's `…/clinvar-gkm/1.2.0/clinvar-gkm-bundle.schema.json`
+resolves once ClinVar-GKM tags 1.2.0 (404 on 2026-11-18). Until then, vendor the set from a clone with
+`vendor-git-schemas.py`, or pass a file.
+
+What w3id serves is what the tag holds. ClinVar-GKM's 1.1.0 tag carries the root `$id`
+`https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/json/ClinvarGkmBundle`, which ClinVar-GKM corrected to
+`…/1.1.0/clinvar-gkm-bundle.schema.json` after tagging. So the set the 1.1.0 URL serves (set sha256 `0340922…`) differs
+in that one line from a 1.1.0 set vendored later (`741a29f…`, this repository's test fixture), and the two record
+different `schema_set_sha256`s. The generated default works from either, since it pairs with whatever `$id` the root
+declares. A column set naming the corrected `$id` is refused with the served set, and the refusal names both `$id`s (`it
+says it pairs with schema …, but the schema's $id is …`): pass the set the column set was written for. ClinVar-GKM's
+`main` already declares the 1.2.0 root `$id` as its own URL, so from its 1.2.0 tag the URL and the `$id` agree.
+
 ## Migrating from 1.x
 
 2.0.0 removes what 1.1.0 deprecated. The values of a `sections` build with a pairing don't change. What does: the
@@ -187,8 +243,8 @@ key-value prefix (`gkm_bundle_parquet.` for `clinvar_gkm_parquet.`; `verify` and
 the `source_release` entry, now always empty; and, with the record-identical round trip
 ([docs/round-trip.md](docs/round-trip.md)), the table spec version (`sections` 2.0), the column order of the tables a
 column set's `key_order` named (now schema order, as every other table), and the recorded sha256s
-(`section_records_sha256` and `records_sha256` for the text sha256s). See the [changelog](CHANGELOG.md) for the manifest
-fields.
+(`section_records_sha256` and `records_sha256` for the text sha256s). The [changelog](CHANGELOG.md) has the manifest
+fields and the migration command by command.
 
 | 1.x | 2.0.0 |
 | --- | --- |

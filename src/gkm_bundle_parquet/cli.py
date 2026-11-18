@@ -197,9 +197,11 @@ def _version(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(info, indent=2))
     else:
+        also = ", ".join(p for p in info["kv_prefixes_read"] if p != info["kv_prefix"])
         print(
             f"gkm-bundle-parquet {info['tool_version']}: table spec {info['table_spec']} "
-            f"{info['table_spec_version']}; duckdb {info['duckdb_version']}\n{info['schema_version_rule']}"
+            f"{info['table_spec_version']}, policy {info['policy_version']}; duckdb {info['duckdb_version']}\n"
+            f"key-value prefix {info['kv_prefix']} (reads also {also})\n{info['schema_version_rule']}"
         )
     return 0
 

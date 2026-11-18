@@ -1,31 +1,59 @@
 # Changelog
 
-All notable changes to this tool. Each release states the table-spec versions it writes and the bundle
-`schema_version`s they read (ADR 0002, ADR 0006). Tags are `vX.Y.Z`.
+All notable changes to this tool. Each release states the table-spec versions it writes and what it reads: through
+1.x, the bundle `schema_version`s; from 2.0.0, any bundle with its schema, and the policy version and key-value prefixes
+too (ADR 0002, ADR 0006, ADR 0009). Tags are `vX.Y.Z`.
 
 ## Unreleased
 
-For 2.0.0. The removals of what 1.1.0 deprecated (ADR 0008, ADR 0009, plan Phase 3 step 3): the tool names no producer
-and has no default bundle, and every run takes one bundle and its pairing. It writes table spec `sections` 2.0 (`draft`)
-only, compiled from the pairing, and pins DuckDB 1.5.4; `version --json` lists no producer's `schema_version`s. The
-tool is renamed `gkm-bundle-parquet` (plan Phase 3 step 4, below).
+For 2.0.0, the first release under the name `gkm-bundle-parquet` (ADR 0009) and the one that implements ADR 0007 and
+ADR 0008's round trip. It removes everything 1.1.0 deprecated (plan Phase 3). It names no producer and has no default
+bundle: every command that reads a bundle to build, select, compile or validate takes one bundle and its schema
+(`--bundle-schema`), and the tables are the schema's **generated default** unless a column set says otherwise.
+
+What it reads and writes (`version --json`): any bundle given its schema, and, with a column set, only a column set that
+compiles to the default or names a projection; no producer's `schema_version` is listed. It writes table spec
+`sections` **2.0** (`draft`), whose rules are the default policy **2.0**, under the key-value prefix
+`gkm_bundle_parquet.`; `verify` and `rebuild` also read the sets tool 1.x wrote with `sections`, under
+`clinvar_gkm_parquet.` or the new prefix. Pins DuckDB 1.5.4.
 
 The removals alone don't change the output otherwise. With the ClinVar-GKM 1.1.0 pairing, on the real excerpt, the CIViC
 fixture, a selection and the 2026-10-31 delta (the newest published), `table-spec.json`, the mini-bundles, `compile-spec`
 and the rebuilt bundles were byte-identical to 1.1.0's, and so was every Parquet file but for the `tool_version` entry
-and, for a file whose name 1.1.0 read a release from, `source_release` (below). The record-identical round trip (ADR 0008
-decisions 1.2 and 1.3, the first breaking change below) then changes the recorded sha256s, the rebuilt text, the table
-spec version and the column order of the tables 1.1.0's column set listed under `key_order`; the values don't change.
-The generated default (ADR 0007, the second breaking change below) then makes the column set optional and changes the
-tables' columns: no `ordinal`, `id_present`, the generic IRI rule, and JSON text where the schema can't settle a
-position.
+and, for a file whose name 1.1.0 read a release from, `source_release` (below). The record-identical round trip then
+changes the recorded sha256s, the rebuilt text, the table spec version and the column order of the tables 1.1.0's
+column set listed under `key_order`; the values don't change. The generated default then makes the column set optional
+and changes the tables' columns: no `ordinal`, `id_present`, the generic IRI rule, and JSON text where the schema can't
+settle a position. The rename then changes every key-value key, so every file's bytes.
 
 **Breaking changes**
 
-- **The default column set is generated from the bundle schema** (ADR 0007; [docs/generate.md](docs/generate.md),
+- **Renamed `gkm-bundle-parquet`** (ADR 0009 decision 3, #30). Every name the tool carries changes:
+
+  | | 1.x | 2.0.0 |
+  | --- | --- | --- |
+  | PyPI project, console script | `clinvar-gkm-parquet` | `gkm-bundle-parquet` |
+  | Python package | `clinvar_gkm_parquet` | `gkm_bundle_parquet` |
+  | Key-value prefix (every entry of every file) | `clinvar_gkm_parquet.` | `gkm_bundle_parquet.` |
+  | Cache directory | `$XDG_CACHE_HOME/clinvar-gkm-parquet/` | `$XDG_CACHE_HOME/gkm-bundle-parquet/` |
+  | User-Agent | `clinvar-gkm-parquet/<version>` | `gkm-bundle-parquet/<version>` |
+  | Manifest `builder` | `clinvar-gkm-parquet <version>` | `gkm-bundle-parquet <version>` |
+  | Selection mini-bundle | `clinvar-gkm_selection.json.gz` | `gkm-bundle-parquet_selection.json.gz` |
+
+  The new prefix changes every file's bytes. `verify` and `rebuild` read either prefix (below), so sets written by 1.x
+  stay checkable and rebuildable; a file with entries under both is refused. The commands and their options keep their
+  names.
+- **Every command that reads a bundle needs its schema** (ADR 0009 decision 1, #24). `build`, `select`, `compile-spec`,
+  `generate` and `validate` stop with exit 2 without `--bundle-schema`, saying there is no default bundle; `verify` and
+  `rebuild` need none (they read the spec a build wrote beside its manifest), and `verify` takes one optionally (below).
+  `--bundle-schema` is a schema file, a URL (such as a w3id `$id`) or a schema-set directory (README, "Schema sources").
+  Removed: the default producer (`default_pairing.py`, `spec/sections/default-bundle.yaml`), ClinVar-GKM's 1.1.0 schema
+  snapshot (`schemas/1.1.0/`) and column set (`spec/sections/column-sets/1.1.0.columns.yaml`), which are now test
+  fixtures (`tests/fixtures/clinvar-gkm/1.1.0/`), and `compile-spec <schema_version>`.
+- **The default column set is generated from the bundle schema** (ADR 0007, #28; [docs/generate.md](docs/generate.md),
   [docs/column-set-format.md](docs/column-set-format.md)). With `--bundle-schema` and no `--column-set`, `build`,
   `select`, `compile-spec` and `verify` take the schema's default, generated by a fixed policy (policy version `2.0`);
-  `--version-property` names the root's version property for it. The table spec stays `sections` 2.0.
+  `--version-property` names the root's version property for it. The table spec is `sections` 2.0.
   - **`generate`** (new): `generate --bundle-schema S [--version-property V] [-o FILE]` writes the default column set
     and reports, on stderr, every IRI position with no pointer pattern and every JSON-text position with its reason;
     `generate --check --bundle-schema S --column-set C` exits 0 if `C` compiles to the default (an equal
@@ -39,10 +67,6 @@ position.
   - **`id_present`** (BOOLEAN, after `id`) where the record's class allows `id` but doesn't require it, so a record
     without its id round-trips. Where the class requires it, it must equal the key, or the build stops.
   - **Every allowed property is a column or STRUCT field at any depth**; a property set to `false` has none.
-  - **Pointers by `pattern`**: a string whose `pattern` is `^#/<section>/` or `^#/(a|b)/` is a foreign key at any depth
-    (the bare id, plus `<prop>_section` with several targets). Another `^#/` pattern, or one naming something that
-    isn't a collection, stops the compile. Foreign keys (from patterns and `->` shapes) are listed per table in
-    `table-spec.json` (`foreign_keys`) and in each file's key-value metadata (`foreign_keys`).
   - **The generic IRI rule**: `format: iri-reference` with no pattern is `<prop>` (the bare id of a
     `#/<collection>/<rest>` value, or the string as written) and `<prop>_section`. Not a foreign key. ClinVar-GKM 1.1.0's
     `Coding.iris` become `STRUCT(id, section)[]` (from `VARCHAR[]`).
@@ -60,23 +84,21 @@ position.
   - Measured on the 2026-10-31 delta (495,547 records): the published 1.1.0 schema's default is 20 tables, 339 columns
     (43 of them JSON text), 0 foreign keys; the narrowed profiles' (`tests/fixtures/schema-sets/`) is 20 tables, 163
     columns (none JSON text), 26 foreign keys. Both round-trip to the same records sha256 as the source, pass
-    `verify --bundle-recompute`, and build byte-identical twice. Build time, two
-    runs each on a loaded shared machine (load average 17 to 34), so rough: 36 s and 32 s from the published schema,
-    33 s and 30 s from the narrowed one, against 30 s and 25 s for `main` with the 1.1.0 column set (about 1.2x to
-    1.3x).
-- **The round trip is record-identical, not byte-identical** (ADR 0008 decisions 1.2 and 1.3;
+    `verify --bundle-recompute`, and build byte-identical twice. Build time, two runs each on a loaded shared machine
+    (load average 17 to 34), so rough: 36 s and 32 s from the published schema, 33 s and 30 s from the narrowed one,
+    against 30 s and 25 s for `main` with the 1.1.0 column set (about 1.2x to 1.3x).
+- **The round trip is record-identical, not byte-identical** (ADR 0008 decisions 1.2 and 1.3, #26;
   [docs/round-trip.md](docs/round-trip.md)). A rebuilt record must have the same canonical form as its source record:
   RFC 8785 (JCS) with every array sorted by its elements' canonical UTF-8 bytes (a multiset), numbers by their IEEE-754
   double value, strings by their decoded text (no Unicode normalization). Key order, array order, whitespace, escapes
   and number spelling no longer count, for any source layout; a changed value still does. The build's row check
   compares each row's record sha256 with its source record's; `rebuild` and `verify --roundtrip` compare records
   sha256s, not text sha256s.
-  - Recorded: each file's `gkm_bundle_parquet.section_records_sha256` (the sha256 of the sorted lines `<key> TAB
-    <record sha256>`) and the manifest's `records_sha256` (the sha256 of the sorted lines `<section> TAB <section
-    records sha256>` plus `$ TAB <root sha256>`). Removed: `section_text_sha256`, `source_text_sha256` and
-    `source_text_size`. The manifest's `round_trip.promise` is `record-identical` for every layout.
-  - `rebuild` writes the line layout with keys in column order and records in key order (below); it prints the records
-    sha256 instead of a text sha256.
+  - Removed: the text sha256s, `section_text_sha256` (each file) and `source_text_sha256` and `source_text_size` (the
+    manifest), replaced by the records sha256s (Additions). The manifest's `round_trip.promise` is `record-identical`
+    for every layout.
+  - `rebuild` writes the line layout with keys in column order and records in key order; it prints the records sha256
+    instead of a text sha256.
   - `key_order` and `sorted_columns` are gone: a column set with `key_order` is refused, naming the fix; columns are in
     schema order in every table, so a bundle the general reader normalizes compiles to the same spec as one in the
     line layout. The `sections` spec is now **2.0** (a major change: the 7 tables that had `key_order: columns` in the
@@ -93,104 +115,140 @@ position.
     canonicalizes every record and row in Python), `rebuild` 11 s against 10 s, `verify --roundtrip --full` 14 s. The
     records sha256 matched an independent recomputation (stdlib json and hashlib) of the source, the rebuilt
     bundle and the manifest, and two builds gave byte-identical files. The cost on a full release is not measured.
-- **The release model is removed** (ADR 0009 decision 2): `--release`, `--index`, `--delta`, `--manifest` and
-  `--full-source-release` (on `build`, `select`, `verify` and `validate`), and the line index, aliases, delta replay
-  (`replay.py`), `ChainError` and the delta-manifest code behind them. Pass one bundle with `--full <path|url>`, with
-  `--sha256 <hex>` or a `<file>.sha256` sidecar.
-- **No default bundle** (ADR 0009 decision 1): `build`, `select`, `compile-spec`, `generate` and `validate` need
-  `--bundle-schema`; without it each stops with exit 2 and says so (`--column-set` is optional, above).
-  `compile-spec <schema_version>` is removed. The package no longer ships ClinVar-GKM's 1.1.0 schema snapshot
-  (`schemas/1.1.0/`), its column set (`spec/sections/column-sets/1.1.0.columns.yaml`) or `default-bundle.yaml`; the first
-  two are now test fixtures (`tests/fixtures/clinvar-gkm/1.1.0/`).
-- **The fixed specs and the oracle are removed** (ADR 0008 decision 2): `--spec` (and with it `--spec baseline`,
-  `--spec clinvar-gkm`, `clinvar-gkm-1.0`, `clinvar-gkm@1.0`, `--spec sections` and a `tables.yaml` as `--spec`), the
-  `baseline` and `clinvar-gkm` specs with their 22 SQL files, and `verify --against`. `verify` and `rebuild` refuse a set
-  1.x built with one of them (or from deltas), naming the spec: check it with the 1.x tool that wrote it.
-- **`validate` has no default version property** (ADR 0009 decision 4): 1.x used `schema_version` unless the given
-  schema's root didn't declare it. Pass `--version-property schema_version` for ClinVar-GKM bundles to validate each record
-  with the bundle's version, as before. Without it, a version at the root is validated as a root value.
+- **The release model is removed** (ADR 0009 decision 2, #24): `--release`, `--index`, `--delta`, `--manifest` and
+  `--full-source-release` (on `build`, `select`, `verify` and `validate`), and the line index, aliases, pools, frozen
+  manifests, delta replay (`replay.py`), `ChainError` and the delta-manifest code behind them. Pass one bundle with
+  `--full <path|url>`, with `--sha256 <hex>` or a `<file>.sha256` sidecar. Which release a file is, and which file to
+  read, is the producer's business.
+- **The fixed specs and the oracle are removed** (ADR 0008 decision 2, #24): `--spec` (and with it `--spec baseline`,
+  `--spec clinvar-gkm`, `clinvar-gkm-1.0`, `clinvar-gkm@1.0`, `--spec sections` and a hand-written `tables.yaml` as
+  `--spec`), the `baseline` and `clinvar-gkm` specs with their 22 SQL files, `verify --against` and the BigQuery-oracle
+  comparison code. `verify` and `rebuild` refuse a set 1.x built with one of them (or from deltas), naming the spec:
+  check it with the 1.x tool that wrote it.
+- **`validate` has no default version property** (ADR 0009 decision 4, #24): 1.x used `schema_version` unless the given
+  schema's root didn't declare it. Pass `--version-property schema_version` for ClinVar-GKM bundles to validate each
+  record with the bundle's version, as before. Without it, a version at the root is validated as a root value.
 - **The deprecation warnings go with what they named**, the old name's with the rename.
-- **Renamed `gkm-bundle-parquet`** (ADR 0009 decision 3): the PyPI project and the command are `gkm-bundle-parquet`, the
-  package `gkm_bundle_parquet`; so are the cache directory (`$XDG_CACHE_HOME/gkm-bundle-parquet/`), the User-Agent
-  (`gkm-bundle-parquet/<version>`), the manifest's `builder` and the selection's mini-bundle
-  (`gkm-bundle-parquet_selection.json.gz`). Every key-value entry a build writes has the prefix `gkm_bundle_parquet.`
-  instead of `clinvar_gkm_parquet.`, which changes every file's bytes. `verify` and `rebuild` read either prefix, so sets
-  written by 1.x stay checkable and rebuildable; a file with entries under both is refused.
 - **Manifest** (`manifest.json`):
+  - `builder` is `gkm-bundle-parquet <version>` (above);
   - `note` names the bundle (one), not "the ClinVar-GKM JSON bundle(s)";
   - `source_release` and `release` are always `null` (the tool doesn't know which release a file is; a producer that
     publishes the manifest fills them);
   - `source_deltas` and `inputs.deltas` are removed;
-  - `inputs.full` loses `release` and `source_release`.
-- **Key-value metadata:** the same entries. `source_deltas` is always `[]` and `source_release` always empty, kept so
-  the entries stay the same. 1.1.0 filled `source_release` from `--release`, `--full-source-release` or a published
-  ClinVar-GKM file name (`clinvar-gkm-delta_2026-1031.json.gz` gave `2026-10-31`), so such a file's bytes change; the
-  data and every other entry don't.
-- `version --json`: `table_spec` (new) names the one spec and `table_spec_version` is its rules version; `kv_prefix` is
-  new; `table_specs`, `default_table_spec`, `snapshotted_schema_versions`, `tables` and `table_spec_status`, which
-  described the built-in specs, are removed. `version` prints one line for the spec.
+  - `inputs.full` loses `release` and `source_release`;
+  - `records_sha256` replaces `source_text_sha256` and `source_text_size` (above);
+  - `table_spec` gains `policy_version`, `column_set_kind` and `projection`.
+- **Key-value metadata:** every key under `gkm_bundle_parquet.` (above); `section_records_sha256`, `policy_version`,
+  `column_set_kind`, `projection` and `foreign_keys` are new, `section_text_sha256` is gone. `source_deltas` is always
+  `[]` and `source_release` always empty, kept so the entries stay the same. 1.1.0 filled `source_release` from
+  `--release`, `--full-source-release` or a published ClinVar-GKM file name (`clinvar-gkm-delta_2026-1031.json.gz` gave
+  `2026-10-31`), so such a file's bytes change; the data don't.
+- **`version --json`** is the 2.0.0 compatibility matrix: `tool_version`; `table_spec` (the one spec, `sections`),
+  `table_spec_version` and `policy_version` (both `2.0`); `schema_version_rule` (what it reads); `kv_prefix` (the
+  prefix it writes) and `kv_prefixes_read` (`gkm_bundle_parquet.` and `clinvar_gkm_parquet.`); `duckdb_version`; and
+  `validate_engines`. Removed: `table_specs`, `default_table_spec`, `snapshotted_schema_versions`, `tables` and
+  `table_spec_status`, which described the built-in specs. `version` prints the spec and policy versions, the prefixes
+  and the rule.
+
+**Additions**
+
+- **`generate`**, the generated default and named projections (above).
+- **The records sha256** (ADR 0008 decision 1.3, #26; [docs/round-trip.md](docs/round-trip.md)): each file's
+  `gkm_bundle_parquet.section_records_sha256` (the sha256 of the sorted lines `<key> TAB <record sha256>`) and the
+  manifest's `records_sha256` (the sha256 of the sorted lines `<section> TAB <section records sha256>` plus
+  `$ TAB <root sha256>`). It depends only on the records, so two layouts of one bundle have the same one, and anyone can
+  recompute it with a JSON parser and sha256.
+- **Foreign keys from the schema's `pattern`** (ADR 0007, ADR 0008 decision 1.5, #28): a string whose `pattern` is
+  `^#/<section>/` or `^#/(a|b)/` is a foreign key at any depth (the bare id, plus `<prop>_section` with several
+  targets). Another `^#/` pattern, or one naming something that isn't a collection, stops the compile. Foreign keys
+  (from patterns and from a column set's `->` shapes) are listed per table in `table-spec.json` (`foreign_keys`:
+  `position`, `targets` and, with several targets, `section`) and in each file's key-value metadata (`foreign_keys`,
+  JSON).
+- **`table-spec.json` is `sections` 2.0**: the compiled spec beside the manifest names the policy version, the column
+  set's kind and projection, and each table's foreign keys, and has no `key_order`, `sorted_columns` or `ordinal`.
+  `verify` and `rebuild` read it, so they need neither the schema nor the column set.
+- **Reading the old key-value prefix** (ADR 0009 decision 3, #30): `verify` (the directory check,
+  `--bundle-recompute` and `--roundtrip`) and `rebuild` read a file's entries under `gkm_bundle_parquet.` or
+  `clinvar_gkm_parquet.`, so `sections` sets written by 1.x stay checkable and rebuildable. A build writes only the new
+  prefix. `version --json` lists both (`kv_prefixes_read`).
+- **A default DuckDB memory limit** (plan §5, #24): without `--memory-limit`, every `build`, `select`, `verify` and
+  `rebuild` connection sets DuckDB's `memory_limit` to half the memory the process may use, the machine's physical
+  memory or its cgroup limit (v2 `memory.max`, else v1) when that is lower. DuckDB's own default, 80% of physical
+  memory, bounds only its buffers and left too little for the rest of the process on a 32 GB machine (the 2026-11-06
+  oracle run). When no size is known, DuckDB keeps its own default. The limit doesn't change the files' bytes.
+- **`verify` checks a pairing** (#24): given `--bundle-schema` (with `--column-set` if the build had one, else the
+  generated default), it checks that they compile to the spec that wrote the files: the three hashes every file
+  records. A difference is a problem (exit 1); `--column-set` without `--bundle-schema` is a usage error (exit 2).
 
 **Fixes**
 
-- **Fixed:** closing an HTTP stream whose first request failed (an HTTP error, or giving up after the retries) no
-  longer raises `'_HttpStream' object has no attribute '_resp'`; it showed as an ignored exception when the stream was
-  garbage-collected (`transport.py`).
-- **Fixed: `validate` no longer fails every record of a bundle whose root schema `required`s its collections** (CIViC's
+- **`validate` no longer fails every record of a bundle whose root schema `required`s its collections** (#27; CIViC's
   requires all 19 root properties). Each record is still validated alone, as a one-section mini-bundle, but against the
   root schema without its own `required`, every other keyword kept, in both engines; that `required` is then checked
   once, on the names the bundle holds, and each missing name is one failure under that name with no key. Both CIViC
   fixtures now pass (each of their 30 and 23 items failed before), with both engines. ClinVar-GKM's roots have no
-  `required`, so its verdicts don't change; the engine-equivalence evidence was rerun (docs/validate.md).
+  `required`, so its verdicts don't change; the engine-equivalence evidence was rerun ([docs/validate.md](docs/validate.md)).
+- **Closing an HTTP stream whose first request failed** (an HTTP error, or giving up after the retries) no longer
+  raises `'_HttpStream' object has no attribute '_resp'` (#23); it showed as an ignored exception when the stream was
+  garbage-collected (`transport.py`).
+- **`verify --roundtrip --work-dir <dir>`** creates the directory when it doesn't exist (1.1.0 failed; #24).
 
 **Other changes**
 
-- **A default DuckDB memory limit** (plan §5): without `--memory-limit`, every `build`, `select`, `verify` and `rebuild`
-  connection sets DuckDB's `memory_limit` to half the memory the process may use, the machine's physical memory or its
-  cgroup limit (v2 `memory.max`, else v1) when that is lower. DuckDB's own default, 80% of physical memory, bounds only its
-  buffers and left too little for the rest of the process on a 32 GB machine (the 2026-11-06 oracle run). When no size is
-  known, DuckDB keeps its own default. The limit doesn't change the files' bytes.
-- `verify` takes an optional pairing (`--bundle-schema`, with `--column-set` if the build had one, else the generated
-  default) and checks that it compiles to the spec that wrote the files: the three hashes every file records. A
-  difference is a problem (exit 1); `--column-set` without `--bundle-schema` is a usage error (exit 2).
-- `verify --roundtrip --work-dir <dir>` creates the directory when it doesn't exist (1.1.0 failed).
 - The test fixtures' column sets (ClinVar-GKM 1.1.0 and CIViC) narrow the generated default, so they now declare
   themselves projections (`clinvar-gkm-producer`, `civic-fixture`); their `column_set_sha256`s change. The golden
   `sections` spec test compares with ADR 0007's changes applied (no `ordinal`, `id_present`, the generic IRI rule,
   one STRUCT per multi-target pointer element).
-- The producer-freedom check covers the whole package, every module and `sql/_macros.sql`: no module names a producer, its
-  sections or its URLs. Three macros only the removed specs' SQL used are removed. The package description no longer
-  names ClinVar-GKM.
+- The producer-freedom check (`tests/test_any_bundle.py`) covers the whole package, every module and `sql/_macros.sql`:
+  no module names a producer, its sections or its URLs; the one exception is `compat.py`'s old key-value prefix. Three
+  macros only the removed specs' SQL used are removed. The package description no longer names ClinVar-GKM.
 - The opt-in network test of the 1.1.0 schema set checks what w3id serves: the fixture's files but the root, whose `$id`
   is the original `.../1.1.0/json/ClinvarGkmBundle` (the fixture carries the corrected one; the maintainer leaves the
   served set as it is, 2026-11-16). Paired with the 1.1.0 column set, which names the corrected `$id`, the served set is
-  refused; pass the fixture's set (`tests/fixtures/clinvar-gkm/1.1.0/README.md`).
+  refused; pass the fixture's set (`tests/fixtures/clinvar-gkm/1.1.0/README.md`, and the README's "Schema sources").
 - Scripts: `bench-tables.py`, `capture-spec.py`, `make-baseline-spec.py`, `render-spec-readme.py` and
   `extract-fixtures.py` (ClinVar-GKM-specific; the fixtures' provenance names it, so run it from the 1.1.0 source) are
   removed. `sample-bundle.py` takes `--bundle-schema` and `--version-property`; `validate-equivalence.py` takes
   `--version-property` instead of `--index`; `bench-scale.py` has no `--deltas`.
 
-**Migration**
+**Migration (1.x → 2.0.0)**
+
+Command by command (`S` is the bundle's schema, `F` the bundle, `V` its version property, if it has one, such as
+ClinVar-GKM's `schema_version`):
+
+| Command | 1.x | 2.0.0 |
+| --- | --- | --- |
+| install, run | `uvx clinvar-gkm-parquet@1.1.0 <command>`; `import clinvar_gkm_parquet` | `uvx gkm-bundle-parquet@2.0.0 <command>`; `import gkm_bundle_parquet` |
+| `build` | `build --full F --out O` (the built-in ClinVar-GKM pairing) | `build --full F --bundle-schema S [--version-property V] --out O` (the generated default) |
+| `build`, a release | `build --release R` or `--index I` | resolve the release yourself: `build --full <url> --sha256 <hex>` (or its `.sha256` sidecar) `--bundle-schema S ...` |
+| `build`, deltas | `build --full F --delta D --manifest M` (replay) | build from the one bundle you want to read; the tool reads one |
+| `build`, a fixed spec | `build --spec baseline`, `--spec clinvar-gkm`, `--spec my-tables.yaml` | no `--spec`: the `sections` spec of the pairing; a column set with `projection: <name>` for other tables |
+| `build`, a release label | `--full-source-release R` | nothing: the manifest's `source_release` and `release` are `null` for the producer to fill |
+| `select` | `select --full F --driver D ...` | `select --full F --bundle-schema S [--version-property V] --driver D ...` |
+| `compile-spec` | `compile-spec 1.1.0` | `compile-spec --bundle-schema S [--version-property V] [--column-set C]` |
+| `generate` | (none) | `generate --bundle-schema S [--version-property V] -o C`; `generate --check --bundle-schema S --column-set C` |
+| `verify` | `verify DIR [--spec ...]` | `verify DIR`: it reads the spec the build wrote; optionally `--bundle-schema S [--column-set C]` to check a pairing |
+| `verify`, the oracle | `verify DIR --against REF` | `verify DIR --bundle-recompute --full F` and `verify DIR --roundtrip [--full F]` |
+| `verify`, a release | `verify DIR --bundle-recompute --release R` / `--index I` / `--delta D` | `verify DIR --bundle-recompute --full F [--sha256 <hex>]` |
+| `rebuild` | `rebuild DIR -o F`: byte-identical text, checked by text sha256s | the same command: record-identical records, checked by records sha256s; a 1.x set rebuilds unchecked |
+| `validate` | `validate F` (the built-in ClinVar-GKM schema; `schema_version` by default) | `validate F --bundle-schema S [--version-property V]` |
+| `validate`, a release | `validate F --index I` | `validate F --sha256 <hex> --bundle-schema S ...` |
+| `version --json` | `table_specs`, `default_table_spec`, `snapshotted_schema_versions`, `tables`, `table_spec_status` | `table_spec`, `table_spec_version`, `policy_version`, `kv_prefix`, `kv_prefixes_read` |
+
+Column sets, tables and files:
 
 | 1.x | 2.0.0 |
 | --- | --- |
-| `clinvar-gkm-parquet <command>`, `import clinvar_gkm_parquet` | `gkm-bundle-parquet <command>`, `import gkm_bundle_parquet` |
-| `--release R` / `--index I` | resolve the release yourself; `--full <url> --sha256 <hex>` (or its `.sha256` sidecar) |
-| `--delta D --manifest M` (replay) | build the bundle you want to read; the tool reads one |
-| `--full-source-release R` | nothing: the manifest's `source_release` and `release` are `null` for the producer to fill |
-| `build --full F` (the default ClinVar-GKM pairing) | `build --full F --bundle-schema S --version-property schema_version` (the generated default) |
-| `select --full F --driver D` | `select --full F --bundle-schema S --version-property schema_version --driver D` |
-| `compile-spec 1.1.0` | `compile-spec --bundle-schema S --version-property schema_version` |
-| a column set you wrote | `generate --check` it; if it isn't the default, add `projection: <name>` |
+| a column set you wrote (required) | optional: `generate --check` it; if it isn't the default, add `projection: <name>` |
+| `key_order` (and `sorted_columns`) in a column set | delete it: key order doesn't count, and a column set with it is refused |
 | the `ordinal` column | none: rows are in key order |
 | `<prop>` and `<prop>_section` lists of multi-target pointers | one `STRUCT(id, section)` per element in `<prop>` |
-| `Coding.iris` as `VARCHAR[]` | `STRUCT(id, section)[]`: the generic IRI rule |
-| `validate F` | `validate F --bundle-schema S --version-property schema_version` |
-| `--spec baseline`, `--spec clinvar-gkm`, `--spec my.yaml` | the `sections` spec of a pairing; a column set for other tables |
-| `verify --spec ...` | `verify` reads the spec the build wrote; optionally `--bundle-schema S --column-set C` |
-| `verify --against DIR` | `verify --bundle-recompute` and `verify --roundtrip` |
-| the ClinVar-GKM 1.1.0 schema snapshot and column set in the package | ClinVar-GKM's own published pairing (or `tests/fixtures/clinvar-gkm/1.1.0/` in a source tree) |
-| `key_order` (and `sorted_columns`) in a column set | delete it: key order doesn't count, and a column set with it is refused |
+| `Coding.iris` (ClinVar-GKM) as `VARCHAR[]` | `STRUCT(id, section)[]`: the generic IRI rule |
 | `source_text_sha256`, `section_text_sha256` (byte-identical text) | `records_sha256`, `section_records_sha256` (record-identical records; docs/round-trip.md) |
+| key-value prefix `clinvar_gkm_parquet.` | `gkm_bundle_parquet.` (both read by `verify` and `rebuild`) |
+| the ClinVar-GKM 1.1.0 schema snapshot and column set in the package | ClinVar-GKM's own published schema (or `tests/fixtures/clinvar-gkm/1.1.0/` in a source tree) |
+| a `sections` set built by 1.x | still read by `verify` and `rebuild`; build it again to record its records sha256 |
+| a `baseline`, `clinvar-gkm`, custom-spec or delta-replay set built by 1.x | refused: check it with the 1.x tool that wrote it |
 
 ## 1.1.0 (2026-11-16)
 

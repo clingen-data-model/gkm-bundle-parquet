@@ -4,7 +4,8 @@ A bundle schema is enough to build Parquet: the tool **generates** the schema's 
 ([ADR 0007](decisions/0007-default-generated-from-bundle-schema.md)), so a producer publishes its bundle schema and no
 column set. `build`, `select`, `compile-spec` and `verify` take the default whenever `--bundle-schema` comes with no
 `--column-set`. `generate` writes the default out, says what the policy settled, and checks a column set against it.
-On `main` for 2.0.0 (planned).
+From tool 2.0.0 (planned). `--bundle-schema` is a file, a URL or a schema-set directory
+([README, Schema sources](../README.md#schema-sources)).
 
 ```sh
 # The default column set, to a file (or stdout), with the report on stderr
