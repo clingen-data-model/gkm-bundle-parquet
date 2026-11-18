@@ -8,7 +8,7 @@ nothing else is promised about the text. Key order, array order, whitespace, esc
 count; a changed, added or dropped value, record or root member does.
 
 The tool checks this with sha256s of canonical forms, so the check is the same for any layout of the source (the line
-layout, pretty-printed, minified) and doesn't depend on how the rebuilt text is laid out. `src/clinvar_gkm_parquet/canonical.py`
+layout, pretty-printed, minified) and doesn't depend on how the rebuilt text is laid out. `src/gkm_bundle_parquet/canonical.py`
 implements this page.
 
 ## The canonical form of a JSON value
@@ -40,7 +40,7 @@ A record with no canonical form stops the build, naming its section and key.
 | Name | Where it is recorded | The sha256 of |
 | --- | --- | --- |
 | record sha256 | (not recorded) | a record's canonical form, in UTF-8 |
-| section records sha256 | each file's key-value metadata, `clinvar_gkm_parquet.section_records_sha256` | the lines `<key>` TAB `<record sha256>` LF, one per record of the section, sorted by their UTF-8 bytes |
+| section records sha256 | each file's key-value metadata, `gkm_bundle_parquet.section_records_sha256` | the lines `<key>` TAB `<record sha256>` LF, one per record of the section, sorted by their UTF-8 bytes |
 | root sha256 | (not recorded; part of the next) | the canonical form of the bundle's root object with each section's value replaced by `{}` |
 | records sha256 | the manifest, `records_sha256` | the lines `<section>` TAB `<section records sha256>` LF, one per section that holds a record, plus the line `$` TAB `<root sha256>` LF, sorted by their UTF-8 bytes |
 

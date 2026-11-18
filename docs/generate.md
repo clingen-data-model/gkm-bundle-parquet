@@ -8,10 +8,10 @@ On `main` for 2.0.0 (planned).
 
 ```sh
 # The default column set, to a file (or stdout), with the report on stderr
-clinvar-gkm-parquet generate --bundle-schema <file|URL|dir> [--version-property NAME] [-o FILE]
+gkm-bundle-parquet generate --bundle-schema <file|URL|dir> [--version-property NAME] [-o FILE]
 
 # Is this column set the default? Exit 0 if it is, 1 with the differences if not
-clinvar-gkm-parquet generate --check --bundle-schema <file|URL|dir> --column-set FILE
+gkm-bundle-parquet generate --check --bundle-schema <file|URL|dir> --column-set FILE
 ```
 
 `--version-property` names the root property that holds the bundle's version (ClinVar-GKM: `schema_version`); there is
@@ -72,7 +72,7 @@ projection is built and checked as before; its own round trip to a projected bun
 
 A table's foreign keys (from a schema `pattern`, or a column set's `->` shape) are in `table-spec.json` (`foreign_keys`
 on each table: `position`, `targets` and, with several targets, `section`, where the section is held) and in each file's
-key-value metadata (`clinvar_gkm_parquet.foreign_keys`, JSON).
+key-value metadata (`gkm_bundle_parquet.foreign_keys`, JSON).
 
 ## On ClinVar-GKM
 

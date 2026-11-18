@@ -1,6 +1,6 @@
 ---
 name: release-tool
-description: Cut a clinvar-gkm-parquet tool release and update the compatibility matrix. Use when the user asks to release, tag or publish a new version of the tool.
+description: Cut a gkm-bundle-parquet tool release and update the compatibility matrix. Use when the user asks to release, tag or publish a new version of the tool.
 ---
 
 # Cut a tool release
@@ -44,12 +44,14 @@ Every step that publishes (tag push, PyPI, GitHub Release) needs the user's expl
 
 ## 4. Tag and publish (after the user's OK)
 
-- Before the first release from the renamed repository (`clingen-data-model/gkm-bundle-parquet`, ADR 0009), the PyPI
-  project's trusted publisher must name that repository and `release.yml`; the maintainer changes it on PyPI.
+- From 2.0.0 the PyPI project is `gkm-bundle-parquet` (ADR 0009). Its first release goes through the pending trusted
+  publisher the maintainer registered on PyPI: before tagging, check that it names `clingen-data-model/gkm-bundle-parquet`,
+  `release.yml` and the `pypi` environment. A 1.x fix release would still publish `clinvar-gkm-parquet`, through that
+  project's own publisher.
 - Tag the merge commit on `main` as `vX.Y.Z` (`release.yml` checks it against the package version) and push the tag.
 - The release workflow builds the sdist and wheel and publishes them (PyPI via trusted publishing, plus a
   GitHub Release with the changelog entry). Check that the published version installs in a clean environment
-  and that `clinvar-gkm-parquet version --json` reports the expected matrix.
+  and that `gkm-bundle-parquet version --json` reports the expected matrix.
 
 ## 5. Tell the producers
 

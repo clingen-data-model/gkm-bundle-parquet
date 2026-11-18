@@ -1,6 +1,6 @@
 # `validate`: JSON Schema validation of a bundle, fast and proved equal to the reference
 
-`clinvar-gkm-parquet validate <bundle> --bundle-schema <schema>` checks every record of a bundle against its JSON Schema set. ClinVar-GKM validates
+`gkm-bundle-parquet validate <bundle> --bundle-schema <schema>` checks every record of a bundle against its JSON Schema set. ClinVar-GKM validates
 every published bundle strictly with the GA4GH GKM Toolkit (`ga4gh.gkm` 0.4.0), whose validator is Python `jsonschema`. That
 takes days of CPU time for a full bundle. This command gives the same verdicts with jsonschema-rs, in minutes. The evidence
 that the verdicts are the same is below.
