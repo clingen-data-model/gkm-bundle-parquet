@@ -38,7 +38,7 @@ from .build import (
     table_groups,
 )
 from .bundle import ROOT_VALUES_TABLE
-from .compat import LEGACY_KV_PREFIX
+from .compat import KV_PREFIXES_READ, LEGACY_KV_PREFIX
 from .compiled import compile_default, compile_pairing, is_recorded, recorded_spec
 from .errors import InputError, SpecError
 from .model import BuildInputs
@@ -68,7 +68,7 @@ def read_kv(con: duckdb.DuckDBPyConnection, path: Path) -> dict[str, str]:
     for k, v in rows:
         k = k.decode() if isinstance(k, bytes) else k
         v = v.decode() if isinstance(v, bytes) else v
-        for prefix in (KV_PREFIX, LEGACY_KV_PREFIX):
+        for prefix in KV_PREFIXES_READ:
             if k.startswith(prefix):
                 out.setdefault(prefix, {})[k[len(prefix) :]] = v
     if len(out) > 1:

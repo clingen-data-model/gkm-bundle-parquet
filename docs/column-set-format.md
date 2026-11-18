@@ -5,10 +5,10 @@ says what a bundle *may* hold; a column set says what is *built*: which properti
 The tool compiles the two, a *pairing*, into a table spec
 ([ADR 0006](decisions/0006-sections-spec-compiled-from-schemas.md)).
 
-From the generated-default change (ADR 0007, on `main` for 2.0.0) a column set is **optional**. With `--bundle-schema`
-and no `--column-set`, `build`, `select`, `compile-spec` and `verify` take the schema's **default column set**, which
-the tool generates from the schema by a fixed policy ([generate.md](generate.md)). A producer publishes its bundle schema;
-it publishes no column set for the default. A column set you pass is one of two things:
+From tool 2.0.0 (planned; ADR 0007) a column set is **optional**. With `--bundle-schema` and no `--column-set`,
+`build`, `select`, `compile-spec` and `verify` take the schema's **default column set**, which the tool generates from
+the schema by a fixed policy ([generate.md](generate.md)). A producer publishes its bundle schema; it publishes no column
+set for the default. A column set you pass is one of two things:
 
 - **the default**, written out (`generate` writes it): it compiles to the same table spec, so the build is labelled
   `default`;
@@ -157,6 +157,9 @@ streamed.
 
 ## The schema
 
-The bundle schema is a file, a URL, or a directory holding a schema set (`scripts/vendor-schemas.py` writes one, so a
-build needs no network). Its `$id` can have any form, such as a URN. `$ref`s followed from it must be
-`https://w3id.org/` URLs, or JSON pointers within a file.
+The bundle schema is a file, a URL, or a directory holding a schema set (`scripts/vendor-schemas.py` writes one from a
+published schema and `scripts/vendor-git-schemas.py` from a commit of a local clone, so a build needs no network). Its
+`$id` can have any form, such as a URN, and need not be the URL it was read from: a column set's `schema` pairs with the
+`$id` the root declares. `$ref`s followed from it must be `https://w3id.org/` URLs, or JSON pointers within a file. The
+README's [Schema sources](../README.md#schema-sources) says when a producer's w3id URL resolves, and why ClinVar-GKM's
+1.1.0 URL serves a root whose `$id` differs from its fixture's.

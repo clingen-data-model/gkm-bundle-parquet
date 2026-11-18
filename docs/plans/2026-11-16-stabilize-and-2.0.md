@@ -44,7 +44,7 @@ Parquet from it. Additive features come after 2.0.0.
 | Test ids made stable under `-n auto` (gzip `mtime=0`) | Done, #19 (`ad3a4eb`) |
 | 1.1.0: rebase #17 on `main`, CI, review, merge, release (`release-tool` skill) | Done, #17 (`ce1cfd6`), tag `v1.1.0`; on PyPI 2026-11-16, clean `uvx` install checked |
 | GCS: the two frozen oracle reference Parquet folders (`gs://clinvar-gkm/oracle/1.1.0-2026-10-18/`, `…/1.1.0-2026-10-24/`) | Gone: neither folder exists (checked 2026-11-16); the maintainer chose to delete them. `oracle/reports-1.0.1/` and `oracle/keyorder-2026-10-31/` stay |
-| `transport.py`: closing a stream whose request never opened raises `'_HttpStream' object has no attribute '_resp'` (a warning in the test run) | In review, #23 |
+| `transport.py`: closing a stream whose request never opened raises `'_HttpStream' object has no attribute '_resp'` (a warning in the test run) | Done, #23 (`5d0a566`) |
 
 **Stable point:** 1.1.0 on PyPI, from `main`, with nothing else open.
 
@@ -118,7 +118,7 @@ with every open branch.
   requires all 19 root properties. The fix changes validation, so it reruns the engine-equivalence evidence
   ([validate.md](../validate.md)).
 
-### State (2026-11-18)
+### State (2026-11-18, updated for step 5)
 
 | Step / item | State |
 | --- | --- |
@@ -127,10 +127,12 @@ with every open branch.
 | 3. Removals | Done, #24 (`10f0630`) |
 | Default DuckDB memory limit (§5) | Done in #24: `build.default_memory_limit()`, half the memory the process may use (physical, or the cgroup limit when lower). Every connection that runs section SQL goes through `build.configure` (`build`, `select`, `verify --bundle-recompute`/`--roundtrip`, `rebuild`); the others read only Parquet metadata or write the small root-values table. `validate`, `generate` and `compile-spec` run no DuckDB. Tested (`tests/test_memory_limit.py`), documented (README, CHANGELOG Unreleased, `--memory-limit` help). Checked 2026-11-18, no change needed |
 | `validate` failed every CIViC record | Fixed by #27 (`a304fd7`); its engine-equivalence rerun is in [validate.md](../validate.md). Checked 2026-11-18 on `326749d`: both engines pass both CIViC bundles (30 and 23 records), both ClinVar-GKM excerpts against the 1.1.0 and narrowed sets, and the pretty-printed sub-bundle, 0 failing. #24 changed only the version-property default after #27; the evidence passes `--version-property` explicitly, so no rerun |
-| w3id 1.1.0 schema-set sha256 (`0340922…` against `741a29f…`) | Diagnosed (below). Open: the docs part of step 5 |
-| Generated default on ClinVar-GKM's 1.2.0 schema | Run 2026-11-18 (below); rerun after clinvar-gkm #202 |
-| 4. Rename | Left (#21, its own session) |
-| 5. Docs, changelog, matrix; full-size check; release | Left |
+| w3id 1.1.0 schema-set sha256 (`0340922…` against `741a29f…`) | Diagnosed (below); documented in step 5 (README, "Schema sources"; `docs/column-set-format.md`, "The schema") |
+| Generated default on ClinVar-GKM's 1.2.0 schema | Run 2026-11-18 (below). Not final: rerun `generate` (and the commands below) on ClinVar-GKM's final 1.2.0 schema, which adds `primaryCoding` to `ClinvarAggregateClassification` (clinvar-gkm PR #225, for issue #202), before the tool's default for ClinVar-GKM is considered final |
+| 4. Rename | Done, #30 (`9b6bf60`); #21 superseded |
+| 5. Docs, changelog, compatibility matrix | This PR: the changelog's 2.0.0 entry with a command-by-command migration; `version --json` adds `policy_version` and `kv_prefixes_read` (the prefixes `verify` and `rebuild` read, which `verify.read_kv` now takes from `compat`); the README's matrix, `version --json` example and "Schema sources"; the docs' stale "on `main`" notes |
+| Full-size check on a VM | Left: a cost quote first, then the maintainer's approval, before any cloud spend |
+| v2.0.0 release (`release-tool` skill, the pending PyPI publisher) | Left: after the full-size check; sets the version and the changelog date, drops the "planned" notes |
 
 **w3id 1.1.0.** w3id resolves `…/clinvar-gkm/1.1.0/…` to `raw.githubusercontent.com/clingen-data-model/clinvar-gkm/1.1.0/…`,
 the tag. At the tag the root's `$id` is `https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/json/ClinvarGkmBundle` (root
@@ -139,10 +141,11 @@ set `741a29f…`). That line is the only difference (the opt-in network test pas
 whose `$id` differs from its URL by design (schemas.py: the `$id` is the set's key). So the served set loads, and
 `generate` from the URL works and writes `schema: …/json/ClinvarGkmBundle`; only a column set naming the corrected `$id`
 is refused, with "it says it pairs with schema …, but the schema's $id is …". The corrected `$id` first ships at
-clinvar-gkm's 1.2.0 tag, not yet cut (`…/1.2.0/…` is 404 on 2026-11-18; clinvar-gkm `main` @ `e7308f0` has it). For step 5:
-document that a producer passes a tag whose root `$id` is its URL (ClinVar-GKM 1.2.0 or later) or a schema-set
-directory, and that a pairing check names both `$id`s. Still to check: whether the pairing-refusal message should also
-say the root was read from a URL other than its `$id`.
+clinvar-gkm's 1.2.0 tag, not yet cut (`…/1.2.0/…` is 404 on 2026-11-18; clinvar-gkm `main` @ `e7308f0` has it). Step 5
+documents it (README, "Schema sources"): `--bundle-schema` as a local file, a schema-set directory or a w3id URL; a w3id
+`$id` for a producer's schema version resolves only once the producer has tagged that version; the 1.1.0 tag carries the
+older `$id`, which is the sha256 difference above; the pairing refusal names both `$id`s. Still open (a code change, not
+in step 5): whether the pairing-refusal message should also say the root was read from a URL other than its `$id`.
 
 **1.2.0 evidence** (2026-11-18, tool `326749d`; another session's run, spot-checked here). Schema: clinvar-gkm `main` @
 `e7308f0`, vendored with `scripts/vendor-git-schemas.py`: 143 files, schema set sha256 `3e405fb32401016da90be2deff8c0960660cee44336f4f505a8849a521412e40`.
@@ -156,7 +159,8 @@ Bundle: the 2026-10-31 delta (`443178d9…`) with line 2 relabelled `1.2.0` (sha
 - `verify --bundle-recompute --roundtrip --full`: pass (0 problems, 0 groups differ, round trip identical).
 - `validate --engine rs --version-property schema_version`: 0 of 495,547 records fail.
 
-To rerun after clinvar-gkm #202 (`S` a scratch directory, `B` the relabelled delta):
+To rerun on ClinVar-GKM's final 1.2.0 schema, once clinvar-gkm PR #225 (`primaryCoding` on `ClinvarAggregateClassification`,
+issue #202) is merged (`S` a scratch directory, `B` the relabelled delta):
 
 ```sh
 uv run python scripts/vendor-git-schemas.py ~/Development/gks/clinvar-gks main \
