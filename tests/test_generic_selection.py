@@ -141,5 +141,5 @@ def test_a_selection_without_a_pairing_is_refused(tmp_path, capsys):
     rc, _, err = cli(
         capsys, "select", "--full", CIVIC_BUNDLES[0], "--driver", "assertion", "--out", tmp_path / "s.json.gz"
     )
-    assert rc == 2 and "--bundle-schema and --column-set are required" in err
+    assert rc == 2 and "--bundle-schema is required" in err
     assert not (tmp_path / "s.json.gz").exists()

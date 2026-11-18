@@ -534,8 +534,33 @@ def test_run_build_command(monkeypatch, capsys, tmp_path):
     kv = _kv(duckdb.connect(), tmp_path / "o" / "gene.parquet")
     assert kv[KV_PREFIX + "table_spec"] == "sections" and KV_PREFIX + "selection" not in kv
     assert kv[KV_PREFIX + "table_spec_sha256"] == SPEC_SOURCE.sha256
-    with pytest.raises(InputError, match="--bundle-schema and --column-set are required"):
-        run_build_command(_args(full="x", out=tmp_path / "o2", bundle_schema=str(CLINVAR_SCHEMA)))
+    assert (kv[KV_PREFIX + "column_set_kind"], kv[KV_PREFIX + "projection"]) == (
+        "projection",
+        "clinvar-gkm-producer",
+    )
+    with pytest.raises(InputError, match="--bundle-schema is required"):
+        run_build_command(_args(full="x", out=tmp_path / "o2", column_set=str(CLINVAR_COLUMNS)))
+    with pytest.raises(InputError, match="--version-property version differs from the column set's"):
+        run_build_command(
+            _args(bundle_schema=str(CLINVAR_SCHEMA), column_set=str(CLINVAR_COLUMNS), version_property="version")
+        )
+
+
+def test_run_build_command_with_no_column_set_builds_the_generated_default(monkeypatch, capsys, tmp_path):
+    """ADR 0007 decision 2.2: --bundle-schema alone builds the schema's generated default."""
+    monkeypatch.setattr(build_mod, "resolve_build_inputs", lambda args: _fixture_inputs())
+    args = _args(
+        full="x",
+        out=tmp_path / "o",
+        tables="gene,submitter",
+        bundle_schema=str(CLINVAR_SCHEMA),
+        version_property="schema_version",
+    )
+    assert run_build_command(args) == 0
+    kv = _kv(duckdb.connect(), tmp_path / "o" / "gene.parquet")
+    assert (kv[KV_PREFIX + "policy_version"], kv[KV_PREFIX + "column_set_kind"]) == ("2.0", "default")
+    assert KV_PREFIX + "projection" not in kv and kv[KV_PREFIX + "table_spec_sha256"] != SPEC_SOURCE.sha256
+    assert json.loads(kv[KV_PREFIX + "foreign_keys"]) == []
 
 
 def test_build_api_needs_a_spec(tmp_path):

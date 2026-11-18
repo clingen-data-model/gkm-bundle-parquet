@@ -2,7 +2,8 @@
 
 A spec is the contract: every table the tool writes, and per column its name, exact DuckDB type,
 empty-versus-NULL rule and derivation from the bundle. The one spec a build writes, `sections`, is compiled from a
-bundle schema and its column set (compiler.py, compiled.py); a build writes it beside its manifest as
+bundle schema and, optionally, a column set (compiler.py, compiled.py; with none, the schema's generated default,
+ADR 0007); a build writes it beside its manifest as
 table-spec.json, so `verify` and `rebuild` read it back from there. The parser is strict: an unknown key, a missing
 key or a value outside the allowed set raises SpecError, so a change of the format can't change the output
 silently.
@@ -33,15 +34,22 @@ Format (as a mapping; the compiler writes it):
               transform: null             # free text: how the value is read, or null
               pointers: ["[*].allele"]    # optional, typed-copy / extension-slot only: see below
               targets: [location]         # optional, bare-id / pointer-section only: see below
+              parts: {"[*]": <encoding>}  # optional, typed-copy / extension-slot only: see below
+              part: id                    # part only: which part of `encoding` the column holds
+              encoding: <encoding>        # part only: the property's encoding
             description: <one line>
         extension_slots:                  # tables with extension-slot columns (or typed copies holding extensions)
           extensions:                     # column name
             someExtension: value_string   # extension name -> the slot field that holds its value
           classification: json-type       # or: each extension fills the slot of its value's JSON type (below)
         json:                             # optional: how a row is written back as its record (below)
-          record_id: true                 # the record has its own id, equal to the key
+          record_id: true                 # the record's class requires its own id, equal to the key
+        foreign_keys:                     # optional: the declared pointer positions (ADR 0007 decision 2.3)
+          - {position: proposition, targets: [a, b], section: proposition_section}
     lossless: true                        # optional (default false): the spec encodes the bundle's records (below)
     root: {version_property: <name or null>, other_values: <bool>}  # how a bundle's root is read
+    column_set: {kind: default | projection, projection: <name or null>, policy_version: "2.0"}  # optional; not
+                                          # part of table_spec_sha256 (compiler.table_spec_sha256)
 
 Extension slots: an extension struct is `STRUCT(name VARCHAR, <other fields>, value_<slot> <type>, ...)`; the
 bundle's `{name, value, ...}` fills one slot, all others NULL (`[]` for a list slot). Which slot, per column of
@@ -88,25 +96,49 @@ of the type; the copy holds the bare id there, and a non-pointer stops the build
 `{<position>: [<section>, ...]}` gives the same per position (a plain list of positions gives none). A table with
 a `json` block has its pointers checked against their targets (the build's round-trip check, below).
 
+`parts` (typed-copy and extension-slot only): the positions inside the column value, written as for `pointers`
+whose value is stored by an *encoding* (ADR 0007), as one or more parts:
+
+- `{form: json}`: the value as compact JSON text (VARCHAR);
+- `{form: range}`: an integer-or-Range as `integer`, `min`, `max` (BIGINT);
+- `{form: pointer, targets: [a, b]}`: a pointer with several targets, as `id` (the bare id) and `section`;
+- `{form: iri, targets: [...]}`: the generic IRI rule, as `id` (the bare id of a `#/<target>/<rest>` value, else
+  the string as written) and `section` (the target, else NULL);
+- `{form: string-or-object, string: plain | pointer | iri, targets: [...]}`: `string` (plain) or `id` (and
+  `section` for several targets or an IRI), and `json` (an object, as JSON text);
+- `{form: extension}`: the position is an extension STRUCT (its slots are read by the JSON type of the value).
+
+A position with one part holds it in place; inside a STRUCT a property with several parts has its main part under
+the property's name and the others beside it as `<name>_<part>`; a list element with several parts is one STRUCT of
+them, fields named by part (compiler.encoding_parts, compiler.object_fields).
+
+`part` (derivation kind): one part of a top-level property with an encoding; `part` names which, `encoding` gives
+the encoding, and `path` the property. The parts of one property are written back as one value.
+
+`id-present` (derivation kind; BOOLEAN, nulls never, path `$.id`): whether the record carries its own id, for a
+class that allows `id` and doesn't require it. Where it does, the id must equal the key.
+
 `ordinal` (derivation kind; BIGINT, nulls never, no path): the record's position in its bundle section, 0 for the
-section's first record line, in the bundle's order. It is derived from the bundle (ADR 0001).
+section's first record line, in the bundle's order. Tool 1.x wrote it; 2.0.0 writes none (ADR 0008 decision 1.1)
+and reads a 1.x set's to restore its order.
 
 `json` (a table's JSON layout, ADR 0005): how a row is written back as its bundle record. The key column is the
-record's `id` property when `record_id` (the record has none otherwise); each other column is the top-level
-property its path names, except that the range columns of one path (range-exact, range-min, range-max) are one
-integer-or-Range property, and pointer-section and ordinal columns are no property (a pointer-section column gives
-the section of the multi-target bare-id column of the same path). The properties are written in column order and
-every object in its STRUCT field order, an extension's `value_*` slots as one `value` at the first slot's place. A
-`json` block also changes the build: an absent list inside a typed value is NULL, not `[]` (so NULL is absent and
-`[]` empty at every depth, as at the top level), and every row is written back as a record and compared with its
-bundle record by their canonical forms (canonical.py; ADR 0008 decisions 1.2, 1.3: key order, array order, string
-escapes, number spelling and whitespace don't count); any difference stops the build. A `json` block written by
-tool 1.x may also hold `key_order` and `sorted_columns`, which are read and ignored.
+record's `id` property when `record_id`, or when the `id-present` column is true (the record has none otherwise);
+each other column is the top-level property its path names, except that the range columns of one path (range-exact,
+range-min, range-max) are one integer-or-Range property, the part columns of one path are one property, and
+pointer-section and ordinal columns are no property (a pointer-section column gives the section of the multi-target
+bare-id column of the same path). The properties are written in column order and every object in its STRUCT field
+order, an extension's `value_*` slots as one `value` at the first slot's place. A `json` block also changes the
+build: an absent list inside a typed value is NULL, not `[]` (so NULL is absent and `[]` empty at every depth, as
+at the top level), and every row is written back as a record and compared with its bundle record by their canonical
+forms (canonical.py; ADR 0008 decisions 1.2, 1.3: key order, array order, string escapes, number spelling and
+whitespace don't count); any difference stops the build. A `json` block written by tool 1.x may also hold
+`key_order` and `sorted_columns`, which are read and ignored.
 
 `lossless: true`: the spec encodes every record of the bundle (ADR 0005, amended by ADR 0008), which
-`clinvar-gkm-parquet rebuild` writes back, record-identical. Every table needs a `json` block and an `ordinal`
-column as its last column; each section has exactly one table, with no row filter and with `known_fields`; and the
-JSON layout must place every column (roundtrip.lossless_problems).
+`clinvar-gkm-parquet rebuild` writes back, record-identical. Every table needs a `json` block, and an `ordinal`
+column, if it has one (tool 1.x), as its last column; each section has exactly one table, with no row filter and
+with `known_fields`; and the JSON layout must place every column (roundtrip.lossless_problems).
 
 `known_fields: true`: every top-level field of a record must be read by some column at a path `$.<field>`; a
 record with another top-level field stops the build. It needs every column with a path to read a top-level field
@@ -149,9 +181,13 @@ DERIVATION_KINDS = (
     "range-exact",  # a VRS integer-or-Range: the integer; NULL for a Range [min, max]
     "range-min",  # the integer, else the Range's [0]
     "range-max",  # the integer, else the Range's [1]
-    "ordinal",  # the record's position in its bundle section (0-based)
+    "ordinal",  # the record's position in its bundle section (0-based); written by tool 1.x, read only
     "json-text",  # the value at the path, as compact JSON text
+    "part",  # one part of a property with derived parts: its encoding's `part` (below)
+    "id-present",  # BOOLEAN: the record carries its own id
 )
+PARTS = ("id", "string", "section", "json", "integer", "min", "max")  # the parts an encoding stores (compiler)
+ENCODING_FORMS = ("json", "range", "pointer", "iri", "string-or-object", "extension")
 RANGE_KINDS = ("range-exact", "range-min", "range-max")
 JSON_TYPE_SLOTS = "json-type"  # extension_slots.<column>: each extension fills the slot of its value's JSON type
 _TABLE_KEYS = {
@@ -165,11 +201,12 @@ _TABLE_KEYS = {
     "extension_slots",
     "known_fields",
     "json",
+    "foreign_keys",
 }
-_TABLE_OPTIONAL = {"extension_slots", "sort_key_unique", "known_fields", "json"}
+_TABLE_OPTIONAL = {"extension_slots", "sort_key_unique", "known_fields", "json", "foreign_keys"}
 _COLUMN_KEYS = {"name", "type", "nulls", "derivation", "description"}
-_DERIVATION_KEYS = {"kind", "path", "transform", "pointers", "targets"}
-_DERIVATION_OPTIONAL = {"pointers", "targets"}
+_DERIVATION_KEYS = {"kind", "path", "transform", "pointers", "targets", "parts", "part", "encoding"}
+_DERIVATION_OPTIONAL = {"pointers", "targets", "parts", "part", "encoding"}
 _JSON_KEYS = {"record_id"}
 # A set built by tool 1.x carries these in its table-spec.json (the byte-identical round trip's key order). Read
 # and ignored, so verify and rebuild still read that set: key order doesn't count (ADR 0008 decision 1.2).
@@ -179,7 +216,7 @@ LIST_PATH_RE = re.compile(r"\$(?:\.\w+(?:\[\*\])*)+")
 FIELD_PATH_RE = re.compile(r"\$(?:\.\w+)+")
 POINTER_POS_RE = re.compile(r"(?:\[\*\]|\.\w+)+")
 _POINTER_KINDS = ("typed-copy", "extension-slot")
-_FIELD_PATH_KINDS = (*_POINTER_KINDS, *RANGE_KINDS, "json-text")
+_FIELD_PATH_KINDS = (*_POINTER_KINDS, *RANGE_KINDS, "json-text", "part", "id-present")
 _TOP_KEYS = {
     "name",
     "spec_version",
@@ -190,8 +227,9 @@ _TOP_KEYS = {
     "tables",
     "lossless",
     "root",
+    "column_set",
 }
-_TOP_OPTIONAL = {"name", "lossless", "root"}
+_TOP_OPTIONAL = {"name", "lossless", "root", "column_set"}
 _ROOT_KEYS = {"version_property", "other_values"}
 NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 VERSION_RE = re.compile(r"\d+\.\d+")
@@ -205,6 +243,11 @@ class Derivation:
     pointers: tuple[str, ...] = ()  # typed-copy / extension-slot: pointer positions in the value (docstring)
     targets: tuple[str, ...] = ()  # bare-id / pointer-section: the sections the pointer may name
     pointer_targets: tuple[tuple[str, ...], ...] = ()  # per position of `pointers` when given as a mapping
+    # typed-copy / extension-slot: encoded positions in the value -> encoding (docstring); None: a spec of tool
+    # 1.x, which states none (an extension struct is then known by its field names)
+    parts: dict[str, dict] | None = None
+    part: str | None = None  # part: which part of the property's encoding the column holds
+    encoding: dict | None = None  # part: the property's encoding
 
 
 @dataclass(frozen=True)
@@ -236,6 +279,7 @@ class Table:
     sort_key_unique: str | None = None
     known_fields: bool = False  # every top-level record field must be read by a column (docstring)
     json: JsonLayout | None = None  # the record's JSON layout (round trip, ADR 0005)
+    foreign_keys: tuple[dict, ...] | None = None  # the declared pointer positions (ADR 0007 decision 2.3)
 
     @property
     def file_name(self) -> str:
@@ -301,6 +345,8 @@ class SpecSource:
     sha256: str  # compiler.table_spec_sha256 of the compiled spec
     schema_set_sha256: str | None = None  # the schema set a compiled spec was compiled from
     column_set_sha256: str | None = None  # the column set it was compiled from
+    column_set_kind: str | None = None  # "default" (generated, or compliant) or "projection" (ADR 0007 §3)
+    projection: str | None = None  # a projection's name
     raw: dict | None = field(default=None, compare=False)  # a compiled spec's mapping
 
     @property
@@ -322,6 +368,9 @@ SPEC_KV_KEYS = (
     "table_spec_sha256",
     "schema_set_sha256",
     "column_set_sha256",
+    "policy_version",
+    "column_set_kind",
+    "projection",
 )
 
 
@@ -337,6 +386,13 @@ def kv_metadata(source: SpecSource) -> dict[str, str]:
         kv["table_spec_sha256"] = source.sha256
         kv["schema_set_sha256"] = source.schema_set_sha256
         kv["column_set_sha256"] = source.column_set_sha256
+        if source.column_set_kind is not None:
+            # The default policy's version is the rules' (ADR 0007 decision 1.1); a set says whether it is the
+            # default or a named projection (decision 2.5).
+            kv["policy_version"] = source.version
+            kv["column_set_kind"] = source.column_set_kind
+            if source.projection is not None:
+                kv["projection"] = source.projection
     return kv
 
 
@@ -360,6 +416,20 @@ def path_problems(d: Derivation) -> list[str]:
             out.append(f"path {path!r} is not $.<field>, optionally with more .<field> and [*] steps")
     if d.pointers and kind not in _POINTER_KINDS:
         out.append(f"pointers is for {' and '.join(_POINTER_KINDS)} columns only")
+    if d.parts is not None and kind not in _POINTER_KINDS:
+        out.append(f"parts is for {' and '.join(_POINTER_KINDS)} columns only")
+    for pos, enc in (d.parts or {}).items():
+        if not POINTER_POS_RE.fullmatch(pos):
+            out.append(f"parts position {pos!r} is not [*] and .<field> steps (e.g. [*].allele)")
+        out.extend(f"parts {pos}: {p}" for p in encoding_problems(enc))
+    if kind == "part":
+        if d.part not in PARTS:
+            out.append(f"a part column names its part, one of {PARTS}, not {d.part!r}")
+        out.extend(f"encoding: {p}" for p in encoding_problems(d.encoding))
+    elif d.part is not None or d.encoding is not None:
+        out.append("part and encoding are for part columns only")
+    if kind == "id-present" and path != "$.id":
+        out.append(f"an id-present column reads $.id, not {path!r}")
     if d.targets and kind not in ("bare-id", "pointer-section"):
         out.append("targets is for bare-id and pointer-section columns only")
     for pos in d.pointers:
@@ -367,6 +437,24 @@ def path_problems(d: Derivation) -> list[str]:
             out.append(f"pointer position {pos!r} is not [*] and .<field> steps (e.g. [*].allele)")
     if len(set(d.pointers)) != len(d.pointers):
         out.append("pointers lists a position twice")
+    return out
+
+
+def encoding_problems(enc: object) -> list[str]:
+    """What is wrong with a position's encoding (module docstring); empty: nothing."""
+    if not isinstance(enc, dict) or enc.get("form") not in ENCODING_FORMS:
+        return [f"an encoding is {{form: one of {ENCODING_FORMS}, ...}}, not {enc!r}"]
+    form, out = enc["form"], []
+    targets = enc.get("targets")
+    if form in ("pointer", "iri") or (form == "string-or-object" and enc.get("string") in ("pointer", "iri")):
+        if not _section_list(targets):
+            out.append(f"a {form} encoding names its target sections, not {targets!r}")
+    if form == "pointer" and _section_list(targets) and len(targets) < 2:
+        out.append("a pointer with one target is a bare id (pointers), not an encoding")
+    if form == "string-or-object" and enc.get("string") not in ("plain", "pointer", "iri"):
+        out.append(
+            f"a string-or-object encoding reads its string as plain, pointer or iri, not {enc.get('string')!r}"
+        )
     return out
 
 
@@ -441,6 +529,9 @@ def parse_spec(raw: object, where: str = "tables.yaml", *, require_name: bool = 
             targets = d.get("targets", [])
             if "targets" in d and not _section_list(targets):
                 raise SpecError(f"{cw}: derivation targets must be a non-empty list of section names")
+            parts = d.get("parts")
+            if parts is not None and not isinstance(parts, dict):
+                raise SpecError(f"{cw}: derivation parts must be a mapping of positions to encodings")
             derivation = Derivation(
                 kind=d["kind"],
                 path=d["path"],
@@ -448,6 +539,9 @@ def parse_spec(raw: object, where: str = "tables.yaml", *, require_name: bool = 
                 pointers=tuple(pointers),
                 targets=tuple(targets),
                 pointer_targets=pointer_targets,
+                parts=dict(parts) if parts is not None else None,
+                part=d.get("part"),
+                encoding=d.get("encoding"),
             )
             bad = path_problems(derivation)
             if bad:
@@ -479,6 +573,12 @@ def parse_spec(raw: object, where: str = "tables.yaml", *, require_name: bool = 
         if not isinstance(known_fields, bool):
             raise SpecError(f"{tw}: known_fields must be true or false")
         layout = _json_layout(t["json"], tw) if "json" in t else None
+        fks = t.get("foreign_keys")
+        if fks is not None and not (
+            isinstance(fks, list)
+            and all(isinstance(f, dict) and set(f) == {"position", "targets", "section"} for f in fks)
+        ):
+            raise SpecError(f"{tw}: foreign_keys must be a list of {{position, targets, section}}")
         tables.append(
             Table(
                 name=t["name"],
@@ -491,6 +591,7 @@ def parse_spec(raw: object, where: str = "tables.yaml", *, require_name: bool = 
                 sort_key_unique=unique_note,
                 known_fields=known_fields,
                 json=layout,
+                foreign_keys=tuple(fks) if fks is not None else None,
             )
         )
     return Spec(

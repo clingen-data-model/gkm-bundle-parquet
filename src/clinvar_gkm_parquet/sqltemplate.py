@@ -74,6 +74,7 @@ from importlib import resources
 
 import duckdb
 
+from .compiler import encoding_parts, object_fields
 from .errors import SpecError
 from .spec import JSON_TYPE_SLOTS, Column, Table
 
@@ -122,6 +123,11 @@ class _Gen:
         self.json_type = self.slots == JSON_TYPE_SLOTS  # slots by the value's JSON type, not by name
         self.null_lists = table.json is not None  # an absent nested list is NULL, not [] (module docstring)
         self.pointers = pointers
+        # Encoded positions (spec.py `parts`), in this generator's position spelling ([] for [*]). A spec of tool
+        # 1.x states none: an extension struct is then known by its field names.
+        parts = column.derivation.parts
+        self.explicit = parts is not None
+        self.parts = {p.replace("[*]", "[]"): e for p, e in (parts or {}).items()}
         self.used_pointers: set[str] = set()
         self.used_slots: set[str] = set()
         self.saw_ext = False  # the type holds an extension struct
@@ -141,6 +147,11 @@ class _Gen:
 
     def expr(self, x: str, t, rel: str, top: bool = False) -> str:
         tid = t.id
+        enc = self.parts.get(rel)
+        if enc is not None and enc["form"] != "extension":
+            if tid == "struct":  # a list element with derived parts: one STRUCT of them
+                return self.element(x, t, rel, enc)
+            return self.part(x, enc, encoding_parts(enc)[0][0], rel)
         if tid == "struct":
             return self.struct(x, t, rel)
         if tid == "list":
@@ -171,15 +182,44 @@ class _Gen:
             f"ELSE {not_list} END"
         )
 
+    def is_ext(self, rel: str, names: list[str]) -> bool:
+        """Whether the STRUCT at rel is an extension: by its `parts` entry, or, in a spec of tool 1.x, by its
+        fields (`name` and `value_*`)."""
+        if self.explicit:
+            return self.parts.get(rel, {}).get("form") == "extension"
+        return "name" in names and any(f.startswith("value_") for f in names)
+
+    def members(self, fields, rel: str, is_ext: bool) -> tuple[list[str], dict[str, tuple[str, dict, str]]]:
+        """(the JSON keys of the object at rel, {field: (its JSON key, encoding, part)} for the fields that hold a
+        part of an encoded property: `<p>` and its `<p>_<part>` siblings)."""
+        keys, member_of = [], {}
+        names = {f for f, _ in fields}
+        for f, _ in fields:
+            if f in member_of or (is_ext and f.startswith("value_")):
+                continue
+            enc = self.parts.get(f"{rel}.{f}")
+            if enc is not None and enc["form"] != "extension":
+                for name, part, _ in object_fields(f, enc):
+                    if name not in names:
+                        raise SpecError(f"{self.ctx}: field {name} of encoded {f} is not in the type at {rel}")
+                    member_of[name] = (f, enc, part)
+            keys.append(f)
+        return keys, member_of
+
+    def field_value(self, s: str, f: str, ft, rel: str, member_of: dict) -> str:
+        if f in member_of:
+            key, enc, part = member_of[f]
+            return self.part(f"{s}.{_ident(key)}", enc, part, f"{rel}.{key}")
+        return self.expr(f"{s}.{_ident(f)}", ft, f"{rel}.{f}")
+
     def struct(self, x: str, t, rel: str) -> str:
         fields = list(t.children)
         names = [f for f, _ in fields]
-        slot_fields = [f for f in names if f.startswith("value_")]
-        is_ext = "name" in names and bool(slot_fields)
+        is_ext = self.is_ext(rel, names)
         if is_ext and not self.slots:
             raise SpecError(f"{self.ctx}: extension struct at {rel or '(column)'} but no extension_slots entry")
         self.saw_ext = self.saw_ext or is_ext
-        plain = [f for f in names if f not in slot_fields]
+        plain, member_of = self.members(fields, rel, is_ext)
         json_keys = plain + (["value"] if is_ext else [])
         where = rel or "(column)"
         # Fields come out as JSON for the per-field checks; with name-map slots an extension's name comes out as
@@ -192,7 +232,7 @@ class _Gen:
         k = self.var("k")
         s = self.var("s")
         unknown = f"list_filter(json_keys({x}), lambda {k}: NOT list_contains({allowed}, {k}))"
-        packed = self.pack(s, fields, rel, is_ext)
+        packed = self.pack(s, fields, rel, is_ext, member_of)
         not_object = self.fail(_lit(f"expected an object at {where}, got ") + f" || {x}")
         extra = self.fail(_lit(f"field(s) not in the spec type at {where}: ") + f" || {unknown}::VARCHAR")
         # One json_transform per object, bound to s so the fields are read from it without re-parsing.
@@ -203,9 +243,9 @@ class _Gen:
             f"ELSE {not_object} END"
         )
 
-    def pack(self, s: str, fields, rel: str, is_ext: bool) -> str:
+    def pack(self, s: str, fields, rel: str, is_ext: bool, member_of: dict) -> str:
         if is_ext and self.json_type:
-            return self.pack_json_type(s, fields, rel)
+            return self.pack_json_type(s, fields, rel, member_of)
         parts = []
         if is_ext:
             here = {f for f, _ in fields if f.startswith("value_")}
@@ -226,7 +266,7 @@ class _Gen:
                 else:
                     val = absent
             else:
-                val = self.expr(f"{s}.{_ident(f)}", ft, frel)
+                val = self.field_value(s, f, ft, rel, member_of)
             parts.append(f"{_ident(f)} := {val}")
         packed = f"struct_pack({', '.join(parts)})"
         if not is_ext:
@@ -234,23 +274,29 @@ class _Gen:
         unknown = self.unknown_name(name_sql, known)
         return f"CASE WHEN {unknown} THEN {self.name_fail(name_sql, rel)} ELSE {packed} END"
 
-    def pack_json_type(self, s: str, fields, rel: str) -> str:
+    def pack_json_type(self, s: str, fields, rel: str, member_of: dict) -> str:
         """An extension with json-type slots: the value fills the one slot of its JSON type (cgp_ext_kind), every
-        other slot is NULL ([] for a list slot); a kind the struct has no slot for stops the build."""
+        other slot is NULL ([] for a list slot); a kind the struct has no slot for stops the build. A `value_json`
+        slot (the value is open) takes any value but null, as JSON text."""
         where = rel or "(column)"
         kv = self.var("kv")
         kinds = [f.removeprefix("value_") for f, _ in fields if f.startswith("value_")]
         parts = []
         for f, ft in fields:
-            if f.startswith("value_"):
+            if f == "value_json":
+                val = f'CAST({s}."value" AS VARCHAR)'
+            elif f.startswith("value_"):
                 absent = f"CAST([] AS {ft})" if ft.id == "list" and not self.null_lists else "NULL"
                 value = self.expr(f'{s}."value"', ft, f"{rel}.{f}")
                 val = f"CASE WHEN {kv} = {_lit(f.removeprefix('value_'))} THEN {value} ELSE {absent} END"
             else:
-                val = self.expr(f"{s}.{_ident(f)}", ft, f"{rel}.{f}")
+                val = self.field_value(s, f, ft, rel, member_of)
             parts.append(f"{_ident(f)} := {val}")
         # An empty array has no element kind: it fills no slot, and is allowed where the struct has an array slot.
         accepted = kinds + (["array"] if any(k.endswith("_array") for k in kinds) else [])
+        if "json" in kinds:
+            accepted = ["string", "boolean", "integer", "number", "object", "array", "mixed_array"]
+            accepted += [f"{k}_array" for k in ("string", "boolean", "integer", "number", "object", "array")]
         slots = ", ".join(f"value_{k}" for k in kinds)
         msg = (
             f"CASE {kv} WHEN 'null' THEN {_lit(f'extension value at {where} is null or absent')} "
@@ -265,6 +311,45 @@ class _Gen:
         )
         return f'(list_transform([cgp_ext_kind({s}."value")], lambda {kv}: {body}))[1]'
 
+    # --- encoded positions (ADR 0007 decisions 1.6-1.10) ---------------------------------------------------------
+
+    def element(self, x: str, t, rel: str, enc: dict) -> str:
+        """A list element with derived parts: one STRUCT of them; a JSON null element is NULL."""
+        packed = ", ".join(f"{_ident(f)} := {self.part(x, enc, f, rel)}" for f, _ in t.children)
+        return f"CASE coalesce(json_type({x}), 'NULL') WHEN 'NULL' THEN NULL ELSE struct_pack({packed}) END"
+
+    def part(self, x: str, enc: dict, part: str, rel: str) -> str:
+        """One part of the JSON value x (JSON, or NULL when absent) by its encoding."""
+        form, where = enc["form"], rel or "(column)"
+        if form == "json":
+            return f"CAST({x} AS VARCHAR)"
+        if form == "range":
+            if part == "integer":
+                return f"cgp_range_exact({x}, {self.ctx}, key)"
+            return f"cgp_range_bound({x}, {0 if part == 'min' else 1}, {self.ctx}, key)"
+        if form == "string-or-object":
+            on_object = f"CAST({x} AS VARCHAR)" if part == "json" else "NULL"
+            on_string = "NULL" if part == "json" else self.string_part(x, enc["string"], enc, part, rel)
+            bad = self.fail(_lit(f"expected a string or an object at {where}, got ") + f" || {x}")
+            return (
+                f"CASE coalesce(json_type({x}), 'NULL') WHEN 'NULL' THEN NULL WHEN 'VARCHAR' THEN {on_string} "
+                f"WHEN 'OBJECT' THEN {on_object} ELSE {bad} END"
+            )
+        return self.string_part(x, form, enc, part, rel)
+
+    def string_part(self, x: str, reading: str, enc: dict, part: str, rel: str) -> str:
+        p = _lit(rel or "(column)")
+        if reading == "plain":
+            return f"cgp_str({x}, {self.ctx}, key, {p})"
+        if reading == "pointer":
+            if part == "id":
+                return f"cgp_bare_id({x}, {self.ctx}, key, {p})"
+            return f"regexp_extract(cgp_pointer({x}, {self.ctx}, key, {p}), '^#/([^/]+)/', 1)"
+        v = self.var("i")
+        fn = "cgp_iri_id" if part == "id" else "cgp_iri_section"
+        read = f"{fn}({v}, {_lit(iri_regex(enc))})"
+        return f"(list_transform([cgp_str({x}, {self.ctx}, key, {p})], lambda {v}: {read}))[1]"
+
     def unknown_name(self, name_sql: str, known: list[str]) -> str:
         known_sql = "[" + ", ".join(_lit(n) for n in known) + "]"
         return f"NOT list_contains({known_sql}, coalesce({name_sql}, ''))"
@@ -272,6 +357,19 @@ class _Gen:
     def name_fail(self, name_sql: str, rel: str) -> str:
         msg = _lit(f"unknown extension name at {rel or '(column)'}: ") + f" || coalesce({name_sql}, '(none)')"
         return self.fail(msg)
+
+
+def iri_regex(enc: dict) -> str:
+    """The generic IRI rule's pattern (ADR 0007 decision 1.7): `#/<collection>/<rest>`, groups 1 and 2."""
+    names = "|".join(re.escape(t) for t in enc["targets"])
+    return f"(?s)^#/({names})/(.+)$"
+
+
+def has_parts(c: Column) -> bool:
+    """The column holds an encoded position (spec.py `parts`) other than an extension, or is a part of one."""
+    if c.derivation.kind in ("part", "id-present"):
+        return True
+    return any(e.get("form") != "extension" for e in (c.derivation.parts or {}).values())
 
 
 def typed_expr(table: Table, column: Column, pointers: set[str] | None = None) -> tuple[str, _Gen]:
@@ -607,6 +705,8 @@ def _census(table: Table, text: str) -> bool:
         return False
     if JSON_TYPE_SLOTS in table.extension_slots.values():
         return False
+    if any(has_parts(c) for c in table.columns):  # the fast expressions don't cover them either
+        return False
     for m in _PLACEHOLDER.finditer(text):
         if m.group(1) in ("typed", "bare_id"):
             c = table.column(m.group(2).split()[0])
@@ -699,6 +799,13 @@ def _substitute(
             return slow_of(f"json_extract(record, {_path(table, c)})")
         if name == "walk":
             return _walk_expr(table, c)
+        if name == "part":
+            j = src.json(c) if src else f"json_extract(record, {_path(table, c)})"
+            gen = _Gen(table, c, set())
+            return gen.bind(j, lambda v: gen.part(v, c.derivation.encoding, c.derivation.part, ""))
+        if name == "id_present":
+            j = src.json(c) if src else f"json_extract(record, {_path(table, c)})"
+            return f"coalesce(json_type({j}), 'NULL') <> 'NULL'"
         if name in _RANGE_MACRO:
             j = src.json(c) if src else f"json_extract(record, {_path(table, c)})"
             return _RANGE_MACRO[name].format(j=j, ctx=ctx)
@@ -769,6 +876,8 @@ GENERIC_KINDS = (
     "range-exact",
     "range-min",
     "range-max",
+    "part",
+    "id-present",
 )
 _RANGE_PLACEHOLDER = {"range-exact": "range_exact", "range-min": "range_min", "range-max": "range_max"}
 _RECORD_TYPES = ("JSON", "VARCHAR")
@@ -899,6 +1008,10 @@ def _generic_columns(table: Table) -> tuple[Table, list[str]]:
             lines.append(f"{{{{{_RANGE_PLACEHOLDER[kind]} {c.name}}}}} AS {alias}")
         elif kind == "json-text":
             lines.append(f"CAST({{{{json {c.name}}}}} AS VARCHAR) AS {alias}")
+        elif kind == "part":
+            lines.append(f"{{{{part {c.name}}}}} AS {alias}")
+        elif kind == "id-present":
+            lines.append(f"{{{{id_present {c.name}}}}} AS {alias}")
         else:
             raise SpecError(f"table {table.name}: column {c.name}: the generic renderer has no kind {kind!r}")
         cols.append(c)
@@ -936,6 +1049,14 @@ def generic_problems(table: Table) -> list[str]:
             out.append(f"column {c.name} (ordinal) must be BIGINT with nulls: never")
         elif kind == "record" and c.type not in _RECORD_TYPES:
             out.append(f"column {c.name} (record) must be one of {_RECORD_TYPES}, not {c.type}")
+        elif kind == "part":
+            want = dict(encoding_parts(c.derivation.encoding)).get(c.derivation.part)
+            if want is None:
+                out.append(f"column {c.name} (part) holds part {c.derivation.part}, which its encoding has not")
+            elif c.type != want:
+                out.append(f"column {c.name} (part {c.derivation.part}) must be {want}, not {c.type}")
+        elif kind == "id-present" and (c.type != "BOOLEAN" or c.nulls != "never"):
+            out.append(f"column {c.name} (id-present) must be BOOLEAN with nulls: never")
         elif kind in _RANGE_PLACEHOLDER:
             if c.type != "BIGINT":
                 out.append(f"column {c.name} ({kind}) must be BIGINT, not {c.type}")

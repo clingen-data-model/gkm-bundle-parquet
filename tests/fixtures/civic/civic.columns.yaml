@@ -3,6 +3,8 @@
 # are empty in both bundles, so their columns state what the schema's classes would hold, narrowed by judgement; a record
 # with another property stops the build. A proposition's object may be any of the condition or therapy collections.
 schema: urn:civic:gkm-bundle:schema:0.1.0-a0
+# A named projection (ADR 0008 decision 3): it narrows the generated default by judgement.
+projection: civic-fixture
 sections:
   sequenceReference: {type, refgetAccession}
   location: {id, type, digest, sequence, sequenceReference: ->sequenceReference, start, end}

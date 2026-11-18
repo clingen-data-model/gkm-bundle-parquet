@@ -88,6 +88,13 @@ with every open branch.
    - Foreign keys by schema `pattern`, written to `table-spec.json` and each file's key-value metadata; `generate`
      lists pointer positions without a pattern.
    - This is table spec `sections` 2.0.
+
+   **State (2026-11-16):** implemented on `feat/generated-default` (draft PR to `main`): `generate` and `generate --check`,
+   the default policy 2.0, named projections refused unless declared, foreign keys, `id_present`, no `ordinal`.
+   Evidence on the 2026-10-31 delta with the w3id 1.1.0 schema and the narrowed profiles: record-identical round trip,
+   `--bundle-recompute`, byte-identical rebuilds ([generate.md](../generate.md)). `tests/test_any_bundle.py` still
+   checks the generic core names no producer. Open: the decisions listed in the PR for the maintainer; projections
+   themselves (their omissions and projected bundle) stay in Phase 5.
 3. **Removals** (ADR 0008 decision 2, ADR 0009 decisions 2 and 3).
    - The release model: `sources.py` (line index, aliases, pools, frozen manifests, `resolve_release`), `replay.py`,
      `ChainError`, the release parts of `model.py`, `build.py` and `verify.py`, and the options `--release`, `--index`,

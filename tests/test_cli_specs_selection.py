@@ -127,7 +127,16 @@ def test_the_pairing_builds_the_sections_spec(tmp_path, capsys):
         "schema_set_sha256": source.schema_set_sha256,
         "column_set_sha256": source.column_set_sha256,
         "file": "table-spec.json",
+        # The fixture column set narrows the generated default: a named projection (ADR 0007, ADR 0008 decision 3).
+        "policy_version": "2.0",
+        "column_set_kind": "projection",
+        "projection": "clinvar-gkm-producer",
     }
+    assert (meta["policy_version"], meta["column_set_kind"], meta["projection"]) == (
+        "2.0",
+        "projection",
+        "clinvar-gkm-producer",
+    )
     assert cli(capsys, "verify", out)[0] == 0
     assert cli(capsys, "verify", out, "--bundle-recompute", *FULL, "--work-dir", tmp_path / "w")[0] == 0
 

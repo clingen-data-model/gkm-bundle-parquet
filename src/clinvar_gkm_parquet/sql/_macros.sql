@@ -121,3 +121,20 @@ CREATE OR REPLACE MACRO cgp_ptr_section(sec, id, targets, ctx, k) AS
     ELSE cgp_fail(ctx, k, concat('the pointer to ', id, ' names section ', coalesce(sec, '(none)'),
       ', not one of ', targets::VARCHAR))
   END;
+
+-- The generic IRI rule (ADR 0007 decision 1.7): s is a string, re is '^#/(<collection>|...)/(.+)$'. The id is
+-- <rest> of a value of that form, else the string as written; the section is <collection>, else NULL.
+CREATE OR REPLACE MACRO cgp_iri_id(s, re) AS
+  CASE WHEN regexp_matches(s, re) THEN regexp_extract(s, re, 2) ELSE s END;
+
+CREATE OR REPLACE MACRO cgp_iri_section(s, re) AS
+  CASE WHEN regexp_matches(s, re) THEN regexp_extract(s, re, 1) END;
+
+-- The written-back IRI: '#/<section>/<id>' when the section is set, else the id as written. The section must be one
+-- of the collections (targets).
+CREATE OR REPLACE MACRO cgp_iri_text(sec, id, targets, ctx, k) AS
+  CASE
+    WHEN sec IS NULL THEN id
+    WHEN list_contains(targets, sec) THEN concat('#/', sec, '/', id)
+    ELSE cgp_fail(ctx, k, concat('the IRI ', id, ' names section ', sec, ', not a collection'))
+  END;
