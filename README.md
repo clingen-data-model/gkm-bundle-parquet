@@ -11,11 +11,11 @@ The JSON bundles are the public record. Parquet is a derived convenience: a quic
 content with current database tools such as DuckDB, Polars, pandas and Spark. Every Parquet value can be recomputed from
 the bundle it came from ([ADR 0001](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0001-parquet-derived-from-bundles.md)).
 
-> **Status:** 2.0.0 (planned) is the first release under the name `gkm-bundle-parquet`. It removes what 1.1.0, the last
-> `clinvar-gkm-parquet` release, deprecated: the ClinVar-GKM default bundle, its release model and its fixed table specs
-> ([ADR 0008](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md),
+> **Status:** 2.0.0 is the latest release, and the first under the name `gkm-bundle-parquet`. It removes what 1.1.0,
+> the last `clinvar-gkm-parquet` release, deprecated: the ClinVar-GKM default bundle, its release model and its fixed
+> table specs ([ADR 0008](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md),
 > [ADR 0009](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0009-generic-gkm-bundle-tool-renamed.md)).
-> See [Migrating from 1.x](#migrating-from-1x). Everything 2.0.0 holds is on `main`; it is not on PyPI yet.
+> See [Migrating from 1.x](#migrating-from-1x).
 
 ## Versioning
 
@@ -36,7 +36,7 @@ it reads.
 | 1.0.0 | any bundle with its pairing; ClinVar-GKM by default (snapshot: 1.1.0); `baseline`, `clinvar-gkm`: ClinVar-GKM 1.1.0 | `sections` 1.0 (default; draft), `baseline` 1.0 (draft), `clinvar-gkm` 1.0 (draft) |
 | 1.0.1 | as 1.0.0 | as 1.0.0 |
 | 1.1.0 | as 1.0.0; the default bundle, `baseline` and `clinvar-gkm` deprecated | as 1.0.0 |
-| 2.0.0 (planned) | any bundle with its schema (required) and, optionally, a column set that is the default or a named projection; no default bundle. `verify` and `rebuild`: `sections` sets of 1.x and 2.0.0, key-value prefix `gkm_bundle_parquet.` or `clinvar_gkm_parquet.` | `sections` 2.0 (draft; generated default, policy 2.0; no `key_order` or `ordinal`; a record-identical round trip), key-value prefix `gkm_bundle_parquet.` |
+| 2.0.0 | any bundle with its schema (required) and, optionally, a column set that is the default or a named projection; no default bundle. `verify` and `rebuild`: `sections` sets of 1.x and 2.0.0, key-value prefix `gkm_bundle_parquet.` or `clinvar_gkm_parquet.` | `sections` 2.0 (generated default, policy 2.0; no `key_order` or `ordinal`; a record-identical round trip), key-value prefix `gkm_bundle_parquet.` |
 
 `sections`: one table per bundle collection (20 in ClinVar-GKM 1.1.0), keyed by `id`, compiled from a bundle schema and,
 optionally, a column set, with every record property its own typed column (named as the property; STRUCTs at any depth;
@@ -51,13 +51,12 @@ and root values that aren't collections go in a `root_values` table. There is no
 foreign keys. The build checks every row.
 `rebuild` writes back a bundle whose records are identical to the source's: the same canonical form (RFC 8785 with arrays
 sorted), whatever the source's layout, key order or array order ([docs/round-trip.md](docs/round-trip.md)). This is
-2.0.0's promise (planned; on `main`); 1.x rebuilds a line-layout bundle's text byte for byte and any other layout
-JSON-equal.
+new in 2.0.0; 1.x rebuilt a line-layout bundle's text byte for byte and any other layout JSON-equal.
 
 `version --json` gives the same for scripts: `tool_version`; the spec it writes (`table_spec`), its version
 (`table_spec_version`) and the default policy's (`policy_version`); what it reads (`schema_version_rule`); the key-value
 prefix it writes (`kv_prefix`) and the prefixes `verify` and `rebuild` read (`kv_prefixes_read`); the DuckDB version
-(`duckdb_version`); and `validate`'s engines (`validate_engines`). For 2.0.0 (planned; `schema_version_rule` abridged):
+(`duckdb_version`); and `validate`'s engines (`validate_engines`). For 2.0.0 (`schema_version_rule` abridged):
 
 ```json
 {
@@ -90,7 +89,7 @@ column set. They also read sets built by 1.x with `sections`, under either key-v
 ## Install
 
 ```sh
-uvx gkm-bundle-parquet@2.0.0 version --json   # run a pinned release with no install (planned)
+uvx gkm-bundle-parquet@2.0.0 version --json   # run a pinned release with no install
 pipx install gkm-bundle-parquet==2.0.0        # or install it
 ```
 
@@ -183,9 +182,9 @@ record of the ClinVar-GKM 2026-10-31 delta and a sample of the 2026-10-31 full, 
 ClinVar-GKM's narrowed ones, and on the two CIViC bundles;
 [docs/validate.md](docs/validate.md) has the evidence, the known differences and the timings.
 
-From 2.0.0 (planned; on `main`), `rebuild` writes the line layout, gzip when the output name ends in `.gz`. The text
-need not be the source's (keys come in column order, spacing is the tool's, and array order is not promised); the
-records are, and that is checked: each record's canonical form is hashed, and the records sha256s are compared with each
+From 2.0.0, `rebuild` writes the line layout, gzip when the output name ends in `.gz`. The text need not be the
+source's (keys come in column order, spacing is the tool's, and array order is not promised); the records are, and that
+is checked: each record's canonical form is hashed, and the records sha256s are compared with each
 file's `section_records_sha256` and the manifest's `records_sha256` ([docs/round-trip.md](docs/round-trip.md) defines
 them). A set built by tool 1.x recorded text sha256s instead: it rebuilds unchecked, and `verify --roundtrip` needs
 `--full <bundle>` for it. `rebuild` refuses anything it can't reproduce:

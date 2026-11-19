@@ -1,6 +1,6 @@
 [project]
 name = "gkm-bundle-parquet"
-version = "1.1.0"
+version = "2.0.0"
 description = "Build Parquet tables from GKM JSON bundles, rebuild the bundle from them, and validate bundles"
 readme = "README.md"
 license = "CC0-1.0"

@@ -24,8 +24,8 @@ Every step that publishes (tag push, PyPI, GitHub Release) needs the user's expl
 - `uv sync --locked`, `uv run ruff check`, `uv run ruff format --check` and `uv run pytest` pass (what CI and
   `release.yml` run).
 - Run `build`, then `verify --bundle-recompute` and `verify --roundtrip`, on a **real published bundle** with its producer's
-  pairing (ClinVar-GKM's newest delta, with its `.sha256` sidecar and ClinVar-GKM's vendored pairing), and record the
-  commands and results.
+  schema (ClinVar-GKM's newest delta, with its `.sha256` sidecar and the schema it declares, with the generated
+  default; the package vendors no pairing from 2.0.0), and record the commands and results.
   Every difference is fixed or listed and accepted by the user.
 - Run the build twice and compare file sha256s: the same inputs must give byte-identical files.
 - If the release claims unchanged output, compare the files of the same builds (ClinVar-GKM's pairing, a selection, a
