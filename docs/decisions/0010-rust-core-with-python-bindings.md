@@ -1,6 +1,6 @@
 # 0010 — A Rust core with Python bindings, ported step by step
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-19)
 - **Date:** 2026-11-19
 - **Plan (if any):** none; the steps are below. Amends [ADR 0006](0006-sections-spec-compiled-from-schemas.md) (where
   the generic core goes) and the GKM Toolkit consequence of [ADR 0009](0009-generic-gkm-bundle-tool-renamed.md).

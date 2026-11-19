@@ -18,7 +18,7 @@ generated from the bundle schema, so a column set is required only for a project
 stops on (string-or-object, a nested integer-or-Range, maps, keywords the rules can't read, a class that reaches itself)
 get rules instead, and a schema `pattern` declares a pointer as `->a|b` does.
 
-**Amended by [ADR 0010](./0010-rust-core-with-python-bindings.md) (proposed 2026-11-19):** the generic core moves to a
+**Amended by [ADR 0010](./0010-rust-core-with-python-bindings.md) (accepted 2026-11-19):** the generic core moves to a
 Rust crate with Python bindings, step by step. The GKM Toolkit would call it through the bindings instead of taking in
 the Python source. Decision 8 stands and covers the Rust code.
 

@@ -37,7 +37,7 @@ state is in [ADR 0008](docs/decisions/0008-end-state-reversible-default-custom-p
   projections. ClinVar-GKM plans to publish the default set as its Parquet dataset.
 - The generic core moves to Rust one step at a time, with Python bindings that the GKM Toolkit
   (`ga4gh/gkm-starter-kit`, Python `ga4gh.gkm`) can call. Each step writes the same bytes as the Python build it replaces
-  ([ADR 0010](docs/decisions/0010-rust-core-with-python-bindings.md), proposed; amends
+  ([ADR 0010](docs/decisions/0010-rust-core-with-python-bindings.md); amends
   [ADR 0006](docs/decisions/0006-sections-spec-compiled-from-schemas.md)).
 
 ## Versioning
