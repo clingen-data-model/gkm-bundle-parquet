@@ -44,10 +44,11 @@ Every step that publishes (tag push, PyPI, GitHub Release) needs the user's expl
 
 ## 4. Tag and publish (after the user's OK)
 
-- From 2.0.0 the PyPI project is `gkm-bundle-parquet` (ADR 0009). Its first release goes through the pending trusted
-  publisher the maintainer registered on PyPI: before tagging, check that it names `clingen-data-model/gkm-bundle-parquet`,
-  `release.yml` and the `pypi` environment. A 1.x fix release would still publish `clinvar-gkm-parquet`, through that
-  project's own publisher.
+- From 2.0.0 the PyPI project is `gkm-bundle-parquet` (ADR 0009). It publishes through the GitHub environment
+  `pypi-gkm-bundle-parquet`; its trusted publisher names `clingen-data-model/gkm-bundle-parquet`, `release.yml` and that
+  environment. A 1.x fix release still publishes `clinvar-gkm-parquet` from the 1.x code, through the environment `pypi`
+  and that project's own publisher. The two must not share an environment: PyPI would match the existing
+  `clinvar-gkm-parquet` publisher first, and the upload is refused ("Non-user identities cannot create new projects").
 - Tag the merge commit on `main` as `vX.Y.Z` (`release.yml` checks it against the package version) and push the tag.
 - The release workflow builds the sdist and wheel and publishes them (PyPI via trusted publishing, plus a
   GitHub Release with the changelog entry). Check that the published version installs in a clean environment
