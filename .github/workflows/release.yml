@@ -31,7 +31,10 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    environment: pypi
+    # Its own environment, so PyPI matches only gkm-bundle-parquet's trusted publisher. The old
+    # clinvar-gkm-parquet project's publisher names this repository, release.yml and environment `pypi`;
+    # a 1.x fix release publishes through it from the 1.x code, which still says `pypi`.
+    environment: pypi-gkm-bundle-parquet
     permissions:
       id-token: write # PyPI trusted publishing: no token is stored
     steps:
