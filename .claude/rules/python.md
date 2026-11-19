@@ -18,8 +18,8 @@ round-trip check, `rebuild` and `verify --roundtrip`; ADR 0005, record-identical
 reference; docs/validate.md) and `compat.py` (the source of `version --json`). Update this file when the layout changes.
 
 **No producer in the package** (ADR 0009): no module and no SQL file names a producer, its sections or its URLs;
-`tests/test_any_bundle.py` scans them all. **The generic core** (ADR 0006) also imports nothing outside itself, because it
-is meant to move to the GKM Toolkit:
+`tests/test_any_bundle.py` scans them all. **The generic core** (ADR 0006) also imports nothing outside itself. It moves to
+a Rust crate with Python bindings one step at a time, starting with `canonical.py` (ADR 0010):
 
 - `compiler.py` compiles a table spec from a schema set and a column set, and generates a schema's default column set
   (ADR 0007: `generate_default`, the policy version `RULES_VERSION`); `columnset.py` loads a column set
