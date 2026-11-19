@@ -1,0 +1,14 @@
+# The Rust core and its Python bindings (ADR 0010). The tool version in pyproject.toml covers both crates.
+[workspace]
+members = ["crates/gkm-bundle-core", "crates/gkm-bundle-py"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "CC0-1.0"
+repository = "https://github.com/clingen-data-model/gkm-bundle-parquet"
+publish = false
+
+[profile.release]
+lto = true
+codegen-units = 1
