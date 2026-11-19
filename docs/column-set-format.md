@@ -5,7 +5,7 @@ says what a bundle *may* hold; a column set says what is *built*: which properti
 The tool compiles the two, a *pairing*, into a table spec
 ([ADR 0006](decisions/0006-sections-spec-compiled-from-schemas.md)).
 
-From tool 2.0.0 (planned; ADR 0007) a column set is **optional**. With `--bundle-schema` and no `--column-set`,
+From tool 2.0.0 (ADR 0007) a column set is **optional**. With `--bundle-schema` and no `--column-set`,
 `build`, `select`, `compile-spec` and `verify` take the schema's **default column set**, which the tool generates from
 the schema by a fixed policy ([generate.md](generate.md)). A producer publishes its bundle schema; it publishes no column
 set for the default. A column set you pass is one of two things:
@@ -140,7 +140,7 @@ covers stops the **build**, naming the record: nothing is dropped.
 
 ## Key order doesn't count
 
-From tool 2.0.0 (planned; on `main`) the round trip is record-identical ([round-trip.md](round-trip.md)): a rebuilt
+From tool 2.0.0 the round trip is record-identical ([round-trip.md](round-trip.md)): a rebuilt
 record has the same canonical form as its source record, so key order, array order and layout don't count, and a column
 set says nothing about them. Columns come in schema order, then any positions the schema doesn't name (in an open
 object) in the order this file lists them. Tool 1.x rebuilt a line-layout bundle byte for byte and needed a `key_order`

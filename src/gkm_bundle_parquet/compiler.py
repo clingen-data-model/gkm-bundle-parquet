@@ -1044,7 +1044,7 @@ class _Compiler:
         return {
             "name": SPEC_NAME,
             "spec_version": RULES_VERSION,
-            "status": "draft",
+            "status": "released",
             "bundle_schema_versions": [const] if isinstance(const, str) else [],
             "root": {"version_property": self.version_property, "other_values": self.parts.other_values},
             "lossless": True,

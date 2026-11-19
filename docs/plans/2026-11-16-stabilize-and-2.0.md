@@ -118,7 +118,7 @@ with every open branch.
   requires all 19 root properties. The fix changes validation, so it reruns the engine-equivalence evidence
   ([validate.md](../validate.md)).
 
-### State (2026-11-18, updated for step 5)
+### State (2026-11-18, updated for the release)
 
 | Step / item | State |
 | --- | --- |
@@ -128,11 +128,26 @@ with every open branch.
 | Default DuckDB memory limit (§5) | Done in #24: `build.default_memory_limit()`, half the memory the process may use (physical, or the cgroup limit when lower). Every connection that runs section SQL goes through `build.configure` (`build`, `select`, `verify --bundle-recompute`/`--roundtrip`, `rebuild`); the others read only Parquet metadata or write the small root-values table. `validate`, `generate` and `compile-spec` run no DuckDB. Tested (`tests/test_memory_limit.py`), documented (README, CHANGELOG Unreleased, `--memory-limit` help). Checked 2026-11-18, no change needed |
 | `validate` failed every CIViC record | Fixed by #27 (`a304fd7`); its engine-equivalence rerun is in [validate.md](../validate.md). Checked 2026-11-18 on `326749d`: both engines pass both CIViC bundles (30 and 23 records), both ClinVar-GKM excerpts against the 1.1.0 and narrowed sets, and the pretty-printed sub-bundle, 0 failing. #24 changed only the version-property default after #27; the evidence passes `--version-property` explicitly, so no rerun |
 | w3id 1.1.0 schema-set sha256 (`0340922…` against `741a29f…`) | Diagnosed (below); documented in step 5 (README, "Schema sources"; `docs/column-set-format.md`, "The schema") |
-| Generated default on ClinVar-GKM's 1.2.0 schema | Run 2026-11-18 (below). Not final: rerun `generate` (and the commands below) on ClinVar-GKM's final 1.2.0 schema, which adds `primaryCoding` to `ClinvarAggregateClassification` (clinvar-gkm PR #225, for issue #202), before the tool's default for ClinVar-GKM is considered final |
+| Generated default on ClinVar-GKM's 1.2.0 schema | Run 2026-11-18 on the delta (below), and again in the full-size check with clinvar-gkm PR #225's schema (`primaryCoding` on `ClinvarAggregateClassification`, issue #202). #225 is open (2026-11-18): if it changes before it merges, rerun `generate` (and the commands below) on ClinVar-GKM's final 1.2.0 schema before the tool's default for ClinVar-GKM is considered final |
 | 4. Rename | Done, #30 (`9b6bf60`); #21 superseded |
-| 5. Docs, changelog, compatibility matrix | #31: the changelog's 2.0.0 entry with a command-by-command migration; `version --json` adds `policy_version` and `kv_prefixes_read` (the prefixes `verify` and `rebuild` read, which `verify.read_kv` now takes from `compat`); the README's matrix, `version --json` example and "Schema sources"; the docs' stale "on `main`" notes |
-| Full-size check on a VM | Left: a cost quote first, then the maintainer's approval, before any cloud spend |
-| v2.0.0 release (`release-tool` skill, the pending PyPI publisher) | Left: after the full-size check; sets the version and the changelog date, drops the "planned" notes |
+| 5. Docs, changelog, compatibility matrix | Done, #31 (`77b979d`): the changelog's 2.0.0 entry with a command-by-command migration; `version --json` adds `policy_version` and `kv_prefixes_read` (the prefixes `verify` and `rebuild` read, which `verify.read_kv` now takes from `compat`); the README's matrix, `version --json` example and "Schema sources"; the docs' stale "on `main`" notes |
+| Full-size check on a VM | Done 2026-11-18 (below), on an n2-highmem-16 VM (128 GiB), tool @ `77b979d` |
+| v2.0.0 release (`release-tool` skill, the pending PyPI publisher) | The release PR (`release/v2.0.0`): the version, the changelog date, the matrix, no "planned" notes, `sections` 2.0 `released`. Then the tag and the publish, with the maintainer's OK |
+
+**Full-size check** (2026-11-18; logs `gs://clinvar-gkm/scratch/parquet-2.0.0-check-2026-11-18/`). An n2-highmem-16 VM
+(16 vCPUs, 128 GiB), tool `main` @ `77b979d`. Bundle: ClinVar-GKM's 2026-10-31 full, relabelled to schema 1.2.0; schema:
+clinvar-gkm PR #225's (1.2.0 with `primaryCoding` on `ClinvarAggregateClassification`). With the generated default
+(`--bundle-schema` and `--version-property schema_version`, no column set):
+
+| Step | Result |
+| --- | --- |
+| `generate`, `compile-spec` | OK |
+| `build` | 38 min 23 s, peak RSS 65.0 GiB, with the default DuckDB memory limit (64,411 MiB, half of 128 GiB; it bounds DuckDB's buffers, not the process); 20 tables, 91,854,927 records, 4.3 GB of Parquet |
+| `verify` (the directory) | OK |
+| `verify --bundle-recompute` | 9 min 24 s, 0 differ |
+| `verify --roundtrip` | 29 min 43 s, pass |
+| `rebuild` | 20 min 21 s; records sha256 `4cbb9b6e96d58b37eb584533a37aa79158ba94dc1cf6860b87cbf0ce726a1b80`, equal to the manifest's |
+| `validate --engine rs` | 10 min 48 s, pass |
 
 **w3id 1.1.0.** w3id resolves `…/clinvar-gkm/1.1.0/…` to `raw.githubusercontent.com/clingen-data-model/clinvar-gkm/1.1.0/…`,
 the tag. At the tag the root's `$id` is `https://w3id.org/clingen/schema/clinvar-gkm/1.1.0/json/ClinvarGkmBundle` (root

@@ -246,7 +246,7 @@ def _raw() -> dict:
         lambda r: r["tables"][0]["columns"][1].update(description="reworded"),
         lambda r: r["tables"][1]["columns"][-2]["derivation"].update(transform="reworded"),
         lambda r: r.update(sources=["reworded"]),
-        lambda r: r.update(status="released"),
+        lambda r: r.update(status="draft"),
     ],
 )
 def test_rewording_leaves_the_checksum_unchanged(change):

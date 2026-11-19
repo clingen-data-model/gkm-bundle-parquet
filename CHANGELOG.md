@@ -6,14 +6,16 @@ too (ADR 0002, ADR 0006, ADR 0009). Tags are `vX.Y.Z`.
 
 ## Unreleased
 
-For 2.0.0, the first release under the name `gkm-bundle-parquet` (ADR 0009) and the one that implements ADR 0007 and
-ADR 0008's round trip. It removes everything 1.1.0 deprecated (plan Phase 3). It names no producer and has no default
+## 2.0.0 (2026-11-19)
+
+The first release under the name `gkm-bundle-parquet` (ADR 0009), and the one that implements ADR 0007 and ADR 0008's
+round trip. It removes everything 1.1.0 deprecated (plan Phase 3). It names no producer and has no default
 bundle: every command that reads a bundle to build, select, compile or validate takes one bundle and its schema
 (`--bundle-schema`), and the tables are the schema's **generated default** unless a column set says otherwise.
 
 What it reads and writes (`version --json`): any bundle given its schema, and, with a column set, only a column set that
 compiles to the default or names a projection; no producer's `schema_version` is listed. It writes table spec
-`sections` **2.0** (`draft`), whose rules are the default policy **2.0**, under the key-value prefix
+`sections` **2.0** (`released`), whose rules are the default policy **2.0**, under the key-value prefix
 `gkm_bundle_parquet.`; `verify` and `rebuild` also read the sets tool 1.x wrote with `sections`, under
 `clinvar_gkm_parquet.` or the new prefix. Pins DuckDB 1.5.4.
 
@@ -114,7 +116,11 @@ settle a position. The rename then changes every key-value key, so every file's 
     about 4), so the timings are rough: build 19 s against 12 s for the removals alone (about 1.6x: the row check
     canonicalizes every record and row in Python), `rebuild` 11 s against 10 s, `verify --roundtrip --full` 14 s. The
     records sha256 matched an independent recomputation (stdlib json and hashlib) of the source, the rebuilt
-    bundle and the manifest, and two builds gave byte-identical files. The cost on a full release is not measured.
+    bundle and the manifest, and two builds gave byte-identical files. On a full release (2026-11-18, the 2026-10-31
+    full relabelled to ClinVar-GKM schema 1.2.0, 91,854,927 records, 20 tables, 4.3 GB of Parquet; an n2-highmem-16
+    VM, 128 GiB, the default memory limit 64,411 MiB): build 38 min 23 s at a peak RSS of 65.0 GiB,
+    `verify --bundle-recompute` 9 min 24 s (0 differ), `verify --roundtrip` 29 min 43 s, `rebuild` 20 min 21 s (its
+    records sha256 equal to the manifest's), `validate --engine rs` 10 min 48 s, all passing.
 - **The release model is removed** (ADR 0009 decision 2, #24): `--release`, `--index`, `--delta`, `--manifest` and
   `--full-source-release` (on `build`, `select`, `verify` and `validate`), and the line index, aliases, pools, frozen
   manifests, delta replay (`replay.py`), `ChainError` and the delta-manifest code behind them. Pass one bundle with
@@ -195,6 +201,9 @@ settle a position. The rename then changes every key-value key, so every file's 
 
 **Other changes**
 
+- **`sections` 2.0 is released, not a draft**: a compiled spec's `status` (in `table-spec.json` and the manifest's
+  `table_spec_status`) is `released`. `table_spec_sha256` leaves `status` out, so no hash and no Parquet file changes;
+  a set built from `main` before the release says `draft`.
 - The test fixtures' column sets (ClinVar-GKM 1.1.0 and CIViC) narrow the generated default, so they now declare
   themselves projections (`clinvar-gkm-producer`, `civic-fixture`); their `column_set_sha256`s change. The golden
   `sections` spec test compares with ADR 0007's changes applied (no `ordinal`, `id_present`, the generic IRI rule,
