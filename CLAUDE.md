@@ -35,8 +35,10 @@ state is in [ADR 0008](docs/decisions/0008-end-state-reversible-default-custom-p
 - **The default set** is generated from the bundle schema and rebuilds the bundle **record-identical** (every record by
   key, JSON-equal; key order, array order, whitespace and record order don't count). Custom column sets are labelled
   projections. ClinVar-GKM plans to publish the default set as its Parquet dataset.
-- The generic core is meant to move to the GKM Toolkit (`ga4gh/gkm-starter-kit`, Python `ga4gh.gkm`) when the
-  maintainer asks ([ADR 0006](docs/decisions/0006-sections-spec-compiled-from-schemas.md)).
+- The generic core moves to Rust one step at a time, with Python bindings that the GKM Toolkit
+  (`ga4gh/gkm-starter-kit`, Python `ga4gh.gkm`) can call. Each step writes the same bytes as the Python build it replaces
+  ([ADR 0010](docs/decisions/0010-rust-core-with-python-bindings.md), proposed; amends
+  [ADR 0006](docs/decisions/0006-sections-spec-compiled-from-schemas.md)).
 
 ## Versioning
 
