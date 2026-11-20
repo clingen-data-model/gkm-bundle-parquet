@@ -3,15 +3,12 @@ name: release
 on:
   push:
     tags: ["v*"]
-  # A dry run from any branch (`gh workflow run release.yml --ref <branch>`): builds and checks every wheel and the
-  # sdist, publishes nothing.
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,68 +18,18 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check
       - run: uv run ruff format --check
-      - run: cargo fmt --check && cargo clippy --all-targets -- -D warnings
       - run: uv run pytest
       - name: Check that the tag names the package version
-        if: startsWith(github.ref, 'refs/tags/')
         run: test "$GITHUB_REF_NAME" = "v$(uv run python -c 'import gkm_bundle_parquet as c; print(c.__version__)')"
-
-  # One wheel per platform, for the stable ABI of Python 3.10 and later (ADR 0010 decision 6). `smoke` marks the
-  # wheels this runner can run: each is installed with Python 3.10 and hashes a record.
-  wheels:
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest, target: x86_64, smoke: true }
-          - { os: ubuntu-latest, target: aarch64, smoke: false }
-          - { os: macos-latest, target: aarch64, smoke: true }
-          - { os: macos-latest, target: x86_64, smoke: false }
-          - { os: windows-latest, target: x64, smoke: true }
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist
-          manylinux: auto
-      - if: matrix.smoke
-        uses: astral-sh/setup-uv@v6
-      - if: matrix.smoke
-        shell: bash
-        run: |
-          wheel=$(ls dist/*.whl)
-          # sha256('{"a":[1,2]}'): the canonical form sorts the array
-          uv run --isolated --no-project --python 3.10 --with "$wheel" python -c "
-          from gkm_bundle_parquet.canonical import record_sha256
-          assert record_sha256('{\"a\": [2, 1]}') == '01530d164d479cf08e26d3b1ad9bdba927120d97e2d057a6d792db778780d720'"
-          uv run --isolated --no-project --python 3.10 --with "$wheel" gkm-bundle-parquet version --json
+      - run: uv build
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-${{ matrix.target }}
-          path: dist/*.whl
-          if-no-files-found: error
-
-  sdist:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: dist/*.tar.gz
+          name: dist
+          path: dist/
           if-no-files-found: error
 
   publish:
-    needs: [wheels, sdist]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
     runs-on: ubuntu-latest
     # Its own environment, so PyPI matches only gkm-bundle-parquet's trusted publisher. The old
     # clinvar-gkm-parquet project's publisher names this repository, release.yml and environment `pypi`;
@@ -93,8 +40,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: dist
           path: dist/
-          merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
@@ -106,8 +53,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
+          name: dist
           path: dist/
-          merge-multiple: true
       - name: Create the GitHub Release from the changelog entry
         env:
           GH_TOKEN: ${{ github.token }}

@@ -18,15 +18,14 @@ round-trip check, `rebuild` and `verify --roundtrip`; ADR 0005, record-identical
 reference; docs/validate.md) and `compat.py` (the source of `version --json`). Update this file when the layout changes.
 
 **No producer in the package** (ADR 0009): no module and no SQL file names a producer, its sections or its URLs;
-`tests/test_any_bundle.py` scans them all. **The generic core** (ADR 0006) also imports nothing outside itself. It moves to
-a Rust crate with Python bindings one step at a time, starting with `canonical.py` (ADR 0010):
+`tests/test_any_bundle.py` scans them all. **The generic core** (ADR 0006) also imports nothing outside itself, because it
+is meant to move to the GKM Toolkit:
 
 - `compiler.py` compiles a table spec from a schema set and a column set, and generates a schema's default column set
   (ADR 0007: `generate_default`, the policy version `RULES_VERSION`); `columnset.py` loads a column set
   (`docs/column-set-format.md`); `schemas.py` loads a schema set from a file, URL or directory; `bundle.py` holds the two
-  readers behind the sink interface; `canonical.py` names the Rust core's canonical form and records sha256s
-  (docs/round-trip.md; the extension module `_core`, `.claude/rules/rust.md`); `transport.py` reads bytes from a path
-  or URL; `model.py` and `errors.py`.
+  readers behind the sink interface; `canonical.py` is a record's canonical form and the records sha256s
+  (docs/round-trip.md); `transport.py` reads bytes from a path or URL; `model.py` and `errors.py`.
 
 **The tool around it:** `compiled.py` compiles a pairing (`compile_pairing`: the default, or a named projection) or
 the generated default (`compile_default`), runs `generate`, writes `table-spec.json` beside a build's
@@ -37,8 +36,7 @@ The package ships no schema set and no column set. The suite's ClinVar-GKM pairi
 
 ## Layout and tooling
 
-- `src/` layout, package `gkm_bundle_parquet`, console script `gkm-bundle-parquet`. maturin builds it, with the Rust
-  core as the extension module `gkm_bundle_parquet._core` (`.claude/rules/rust.md`).
+- `src/` layout, package `gkm_bundle_parquet`, console script `gkm-bundle-parquet`.
 - Python `>=3.10`. Manage environments with `uv`; lint and format with `ruff`; test with `pytest`.
 - Runtime dependencies stay minimal: `duckdb` (pinned to the exact version that defines the output, see below),
   `PyYAML` (reads column sets) and `jsonschema-rs` (`validate`'s default engine, pinned exactly, because

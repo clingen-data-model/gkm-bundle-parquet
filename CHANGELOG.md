@@ -6,25 +6,6 @@ too (ADR 0002, ADR 0006, ADR 0009). Tags are `vX.Y.Z`.
 
 ## Unreleased
 
-- **The canonical form and the records sha256s are computed in Rust**, the first step of
-  [ADR 0010](docs/decisions/0010-rust-core-with-python-bindings.md): a crate (`crates/gkm-bundle-core`) with Python
-  bindings (`gkm_bundle_parquet._core`). They are what the build's round-trip check, `rebuild` and `verify --roundtrip`
-  hash; `canonical.py` keeps its interface. The output doesn't change. Measured on 2026-11-19 against 2.0.0:
-  - the same canonical text and sha256 for each of 444,605 texts (every record of the 2026-09-05 ClinVar-GKM weekly
-    delta and of the suite's ClinVar-GKM, CIViC and sub-bundle fixtures, as bytes and as text, and 200,000 generated
-    texts aimed at numbers, escapes, surrogates, duplicate names and malformed JSON), and for 2,999,476 doubles;
-  - byte-identical Parquet files, `table-spec.json` and manifests (but for timestamps) from seven builds of those
-    bundles, and a byte-identical `rebuild` of the delta and the same `verify --roundtrip` report.
-- **Faster builds:** the 2026-09-05 delta (121,248 records) builds in 5.1 to 5.5 s, against 6.9 to 8.0 s with 2.0.0 (three
-  runs each, Apple M2 Pro). The hashing runs in the build's own process, on threads with the GIL released, instead of a
-  pool of worker processes.
-- **A refusal, not a crash:** a record nested deeper than 1,000 levels has no canonical form and stops the build, naming
-  the record. 2.0.0 crashed with `RecursionError` at about that depth. Refusals otherwise give the same reasons; a few
-  are worded differently (`invalid \escape at char 10` for `Invalid \escape: line 1 column 11 (char 10)`).
-- **Packaging:** maturin builds the package. A release ships one compiled wheel per platform for Python 3.10 and later;
-  the sdist needs a Rust toolchain. `release.yml` builds and smoke-tests the wheels, and runs as a dry run, publishing
-  nothing, when started by hand.
-
 ## 2.0.0 (2026-11-19)
 
 The first release under the name `gkm-bundle-parquet` (ADR 0009), and the one that implements ADR 0007 and ADR 0008's

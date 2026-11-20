@@ -43,22 +43,15 @@ dev = [
     "pytest-xdist>=3.8.0",
 ]
 
-# maturin builds the Rust core (crates/, ADR 0010) into gkm_bundle_parquet._core, beside the Python package. An
-# install from the sdist needs a Rust toolchain.
 [build-system]
-requires = ["maturin>=1.16,<2"]
-build-backend = "maturin"
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
 
-[tool.maturin]
-manifest-path = "crates/gkm-bundle-py/Cargo.toml"
-python-source = "src"
-module-name = "gkm_bundle_parquet._core"
-include = [
-    { path = "tests/**/*", format = "sdist" },
-    { path = "scripts/**/*", format = "sdist" },
-    { path = "CHANGELOG.md", format = "sdist" },
-]
-exclude = ["**/__pycache__/**"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/gkm_bundle_parquet"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "scripts", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -77,11 +70,3 @@ select = ["E", "F", "W", "I", "B", "UP"]
 [tool.uv]
 # ga4gh.gkm 0.4.0 (the reference extra) needs pre-releases of the GA4GH model packages.
 prerelease = "allow"
-# Rebuild the Rust core when its sources change (uv otherwise reuses the built package).
-cache-keys = [
-    { file = "pyproject.toml" },
-    { file = "Cargo.toml" },
-    { file = "Cargo.lock" },
-    { file = "crates/**/*.rs" },
-    { file = "crates/**/Cargo.toml" },
-]

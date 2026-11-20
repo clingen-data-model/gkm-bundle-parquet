@@ -96,12 +96,6 @@ pipx install gkm-bundle-parquet==2.0.0        # or install it
 Python 3.10 or later. DuckDB is pinned exactly, because the output bytes depend on it, so an isolated environment
 (`uvx` or `pipx`) avoids a clash with your own DuckDB.
 
-From the next release the package includes compiled Rust code
-([ADR 0010](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0010-rust-core-with-python-bindings.md)).
-Wheels are planned for Linux (x86_64, arm64), macOS (arm64, x86_64) and Windows (x86_64), one each for Python 3.10 and
-later. On any other platform, pip builds the package from the sdist, which needs a Rust toolchain
-([rustup](https://rustup.rs)).
-
 `validate --engine python`, the reference validator, needs the `reference` extra (the GA4GH GKM Toolkit, `ga4gh.gkm`
 0.4.0, Python 3.11 or later), whose GA4GH dependencies are pre-releases:
 `uv tool install --prerelease=allow 'gkm-bundle-parquet[reference]'` or `pip install --pre 'gkm-bundle-parquet[reference]'`.
@@ -289,9 +283,7 @@ with `baseline`, `clinvar-gkm`, a custom spec or from deltas are refused: check 
 ## Contributing
 
 Work on a branch and open a pull request against `main`. Project conventions are in [`CLAUDE.md`](CLAUDE.md)
-and `.claude/rules/`. A development environment needs [uv](https://docs.astral.sh/uv/) and a Rust toolchain
-([rustup](https://rustup.rs)): `uv sync` builds the Rust core (`crates/`) into the package, and rebuilds it when a crate
-changes.
+and `.claude/rules/`.
 
 ## License
 
