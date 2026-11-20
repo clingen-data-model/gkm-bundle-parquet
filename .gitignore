@@ -7,6 +7,10 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .claude/worktrees/
+# the Rust build, and the extension module an editable install puts in the source tree
+/target/
+src/gkm_bundle_parquet/_core*.so
+src/gkm_bundle_parquet/_core*.pyd
 # local build output and work dirs
 /out/
 /work/

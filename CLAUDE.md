@@ -96,6 +96,7 @@ For fixtures and evidence runs only (ClinVar-GKM's data access rules; the tool's
 - `docs/decisions/` — ADRs, one per decision; `README.md` is the index.
 - `.claude/rules/` — path-scoped conventions:
   - [`python.md`](.claude/rules/python.md) — package code and tests (`src/**`, `tests/**`, `pyproject.toml`)
+  - [`rust.md`](.claude/rules/rust.md) — the Rust core and its bindings (`crates/**`, `Cargo.toml`)
   - [`table-spec.md`](.claude/rules/table-spec.md) — the `sections` rules and their bump rules (compiler, SQL)
   - [`docs.md`](.claude/rules/docs.md) — design records and the README (`docs/**`, `README.md`)
 - `.claude/skills/` — `pr` (open a PR), `release-tool` (cut a tool release, update the matrix).

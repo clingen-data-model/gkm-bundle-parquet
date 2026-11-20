@@ -24,8 +24,9 @@ a Rust crate with Python bindings one step at a time, starting with `canonical.p
 - `compiler.py` compiles a table spec from a schema set and a column set, and generates a schema's default column set
   (ADR 0007: `generate_default`, the policy version `RULES_VERSION`); `columnset.py` loads a column set
   (`docs/column-set-format.md`); `schemas.py` loads a schema set from a file, URL or directory; `bundle.py` holds the two
-  readers behind the sink interface; `canonical.py` is a record's canonical form and the records sha256s
-  (docs/round-trip.md); `transport.py` reads bytes from a path or URL; `model.py` and `errors.py`.
+  readers behind the sink interface; `canonical.py` names the Rust core's canonical form and records sha256s
+  (docs/round-trip.md; the extension module `_core`, `.claude/rules/rust.md`); `transport.py` reads bytes from a path
+  or URL; `model.py` and `errors.py`.
 
 **The tool around it:** `compiled.py` compiles a pairing (`compile_pairing`: the default, or a named projection) or
 the generated default (`compile_default`), runs `generate`, writes `table-spec.json` beside a build's
@@ -36,7 +37,8 @@ The package ships no schema set and no column set. The suite's ClinVar-GKM pairi
 
 ## Layout and tooling
 
-- `src/` layout, package `gkm_bundle_parquet`, console script `gkm-bundle-parquet`.
+- `src/` layout, package `gkm_bundle_parquet`, console script `gkm-bundle-parquet`. maturin builds it, with the Rust
+  core as the extension module `gkm_bundle_parquet._core` (`.claude/rules/rust.md`).
 - Python `>=3.10`. Manage environments with `uv`; lint and format with `ruff`; test with `pytest`.
 - Runtime dependencies stay minimal: `duckdb` (pinned to the exact version that defines the output, see below),
   `PyYAML` (reads column sets) and `jsonschema-rs` (`validate`'s default engine, pinned exactly, because

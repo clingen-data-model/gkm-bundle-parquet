@@ -711,7 +711,10 @@ def test_a_manifest_that_disagrees_with_the_files_is_found(excerpt_copy, tmp_pat
 # --- the package knows no producer -------------------------------------------------------------------------------
 
 # What a move of the core to another package takes: it imports nothing outside itself (ADR 0006).
-CORE = ("compiler", "schemas", "columnset", "bundle", "canonical", "transport", "errors", "model")
+CORE = ("compiler", "schemas", "columnset", "bundle", "canonical", "transport", "errors", "model", "_core")
+# The Rust core (ADR 0010): `_core` is its extension module; the scan below reads its sources.
+CRATES = SRC.parents[1] / "crates"
+RUST_FILES = sorted(p for p in CRATES.rglob("*") if p.suffix == ".rs" or p.name == "Cargo.toml")
 # No module and no SQL file names a producer or its URLs (ADR 0009). The one exception: the key-value prefix of
 # sets written under the tool's former name, which verify and rebuild still read (ADR 0009 decision 3).
 ALLOWED_LINES = {
@@ -722,7 +725,10 @@ PACKAGE_FILES = sorted(p for p in SRC.rglob("*") if p.suffix in (".py", ".sql"))
 
 
 def _package_imports(module: str) -> set[str]:
-    """The package's modules `module` imports, at any depth of its code, lazy imports included."""
+    """The package's modules `module` imports, at any depth of its code, lazy imports included. The compiled
+    `_core` imports nothing of the package."""
+    if module == "_core":
+        return set()
     tree = ast.parse((SRC / f"{module}.py").read_text(encoding="utf-8"))
     found: set[str] = set()
     for node in ast.walk(tree):
@@ -746,10 +752,17 @@ def test_the_core_imports_only_the_core():
 
 def test_the_scan_covers_the_whole_package():
     names = {p.name for p in PACKAGE_FILES}
-    assert {f"{m}.py" for m in CORE} | {"cli.py", "build.py", "verify.py", "select.py", "_macros.sql"} <= names
+    assert {f"{m}.py" for m in CORE if m != "_core"} | {
+        "cli.py",
+        "build.py",
+        "verify.py",
+        "select.py",
+        "_macros.sql",
+    } <= names
+    assert {"lib.rs", "canonical.rs", "Cargo.toml"} <= {p.name for p in RUST_FILES}
 
 
-@pytest.mark.parametrize("path", PACKAGE_FILES, ids=lambda p: str(p.relative_to(SRC)))
+@pytest.mark.parametrize("path", PACKAGE_FILES + RUST_FILES, ids=lambda p: str(p.relative_to(SRC.parents[1])))
 def test_the_package_names_no_producer(path):
     hits = []
     for line in path.read_text(encoding="utf-8").splitlines():

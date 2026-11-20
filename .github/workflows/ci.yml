@@ -40,7 +40,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
+      # Builds the Rust core (crates/, ADR 0010) with the runner's Rust toolchain.
       - run: uv sync --locked
       - run: uv run ruff check
       - run: uv run ruff format --check
+      - if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        run: cargo fmt --check && cargo clippy --all-targets -- -D warnings
       - run: uv run pytest -n auto
