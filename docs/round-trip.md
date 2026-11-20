@@ -8,8 +8,8 @@ nothing else is promised about the text. Key order, array order, whitespace, esc
 count; a changed, added or dropped value, record or root member does.
 
 The tool checks this with sha256s of canonical forms, so the check is the same for any layout of the source (the line
-layout, pretty-printed, minified) and doesn't depend on how the rebuilt text is laid out. The Rust core implements this
-page (`crates/gkm-bundle-core/src/canonical.rs`, ADR 0010); `src/gkm_bundle_parquet/canonical.py` names it for the package.
+layout, pretty-printed, minified) and doesn't depend on how the rebuilt text is laid out. `src/gkm_bundle_parquet/canonical.py`
+implements this page.
 
 ## The canonical form of a JSON value
 

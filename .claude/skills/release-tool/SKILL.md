@@ -21,10 +21,8 @@ Every step that publishes (tag push, PyPI, GitHub Release) needs the user's expl
 
 ## 2. Verify before tagging
 
-- `uv sync --locked`, `uv run ruff check`, `uv run ruff format --check`, `cargo fmt --check`, `cargo clippy --all-targets
-  -- -D warnings` and `uv run pytest` pass (what CI and `release.yml` run).
-- Dry-run the release workflow on `main` before tagging: `gh workflow run release.yml --ref main`. It builds every
-  wheel and the sdist and smoke-tests the wheels it can run, and publishes nothing. Every job must pass.
+- `uv sync --locked`, `uv run ruff check`, `uv run ruff format --check` and `uv run pytest` pass (what CI and
+  `release.yml` run).
 - Run `build`, then `verify --bundle-recompute` and `verify --roundtrip`, on a **real published bundle** with its producer's
   schema (ClinVar-GKM's newest delta, with its `.sha256` sidecar and the schema it declares, with the generated
   default; the package vendors no pairing from 2.0.0), and record the commands and results.
@@ -52,8 +50,8 @@ Every step that publishes (tag push, PyPI, GitHub Release) needs the user's expl
   and that project's own publisher. The two must not share an environment: PyPI would match the existing
   `clinvar-gkm-parquet` publisher first, and the upload is refused ("Non-user identities cannot create new projects").
 - Tag the merge commit on `main` as `vX.Y.Z` (`release.yml` checks it against the package version) and push the tag.
-- The release workflow builds the sdist and one compiled wheel per platform (abi3, Python 3.10 and later; ADR 0010) and
-  publishes them (PyPI via trusted publishing, plus a GitHub Release with the changelog entry). Check that the published version installs in a clean environment
+- The release workflow builds the sdist and wheel and publishes them (PyPI via trusted publishing, plus a
+  GitHub Release with the changelog entry). Check that the published version installs in a clean environment
   and that `gkm-bundle-parquet version --json` reports the expected matrix.
 
 ## 5. Tell the producers
