@@ -6,6 +6,11 @@
   [ADR 0002](0002-independent-tool-versioning.md), [ADR 0004](0004-driver-based-selection.md),
   [ADR 0006](0006-sections-spec-compiled-from-schemas.md) and [ADR 0008](0008-end-state-reversible-default-custom-projections-filters.md).
 
+**Amended by [ADR 0011](./0011-apply-upserts-and-deletes.md) (proposed 2026-11-23):** decision 2's "the tool reads one
+bundle" holds for `build` and `select`; `apply` reads a set the tool wrote, one bundle and a list of deleted keys, all
+generic. The release model (which delta follows which release, the manifest format, the chain rule) stays the
+producer's.
+
 ## Context
 
 The tool began as ClinVar-GKM's bundle → Parquet builder. Since then its core has been made producer-free:

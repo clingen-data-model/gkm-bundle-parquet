@@ -12,7 +12,8 @@ The package, `gkm_bundle_parquet`: `cli.py`, `build.py` (the section pipeline), 
 stages, and the staging format), `sources.py` (one input: a path or URL and its expected sha256, from `--sha256` or a
 `<file>.sha256` sidecar), `spec.py` (the compiled spec's format and its checks), `sqltemplate.py` (renders each table's SQL
 from the spec, with the macros in `sql/_macros.sql`), `select.py` (the selection engine: pointer walk and mini-bundle),
-`driver.py` (wires selection into `build` and `select`), `roundtrip.py` (rows back to bundle records: the build's
+`driver.py` (wires selection into `build` and `select`), `apply.py` (`apply`: a set brought up to date from an upserts
+bundle and a list of deleted keys, ADR 0011), `roundtrip.py` (rows back to bundle records: the build's
 round-trip check, `rebuild` and `verify --roundtrip`; ADR 0005, record-identical by docs/round-trip.md), `verify.py`,
 `validate.py` (`validate`: every record of a bundle against its JSON Schema set, with the rs engine or the python
 reference; docs/validate.md) and `compat.py` (the source of `version --json`). Update this file when the layout changes.

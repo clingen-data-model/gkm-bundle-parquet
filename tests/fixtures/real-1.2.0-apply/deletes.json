@@ -1,0 +1,25 @@
+{
+ "conditionSet": [
+  "clinvar.conditionset:vcv-18fe62285134d1a8ee4b85732fe7389b"
+ ],
+ "propositionPathogenicity": [
+  "RCV007128649-G-PATH-NOCP",
+  "RCV007129258-G-PATH-NOCP"
+ ],
+ "evidenceLine": [
+  "RCV000004093.208-G-AFF-NOCP.contributing",
+  "RCV000004093.208-G-AFF.contributing"
+ ],
+ "scv": [
+  "clinvar.submission:SCV000024259.158",
+  "clinvar.submission:SCV000024260.157"
+ ],
+ "vcv": [
+  "VCV000000354.110-G-PATH",
+  "VCV000000354.110-G-PATH-CP"
+ ],
+ "rcv": [
+  "RCV000004093.208-G-AFF",
+  "RCV000004093.208-G-AFF-NOCP"
+ ]
+}

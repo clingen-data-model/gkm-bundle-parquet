@@ -26,3 +26,4 @@ cover the tool only, and link to those rather than restating them.
 - [0007 — The default set is generated from the bundle schema](0007-default-generated-from-bundle-schema.md)
 - [0008 — End state: one reversible default set, custom projections, and filters both ways](0008-end-state-reversible-default-custom-projections-filters.md)
 - [0009 — A generic GKM bundle tool, renamed gkm-bundle-parquet](0009-generic-gkm-bundle-tool-renamed.md)
+- [0011 — `apply`: bring a built set up to date from an upserts bundle and a list of deleted keys](0011-apply-upserts-and-deletes.md) (proposed; 0010 was withdrawn, #36)
