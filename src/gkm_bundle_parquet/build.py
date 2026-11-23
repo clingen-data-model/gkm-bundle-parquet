@@ -64,8 +64,9 @@ KV_KEYS = (
 )
 # Every key, in the order it is written: KV_KEYS, plus the spec's name (build() always writes it), the keys of a
 # custom or compiled spec
-# (spec.kv_metadata), in a lossless build only its section's records sha256 (ADR 0008 decision 1.3; canonical.py)
-# and, in a selective build only, the selection (ADR 0004; select.SELECTION_METADATA_KEY).
+# (spec.kv_metadata), in a lossless build only its section's records sha256 (ADR 0008 decision 1.3; canonical.py),
+# in a selective build only, the selection (ADR 0004; select.SELECTION_METADATA_KEY) and, in a set `apply` wrote
+# only, the chain of applications (ADR 0011; apply.py).
 KV_ORDER = (
     "tool_version",
     "table_spec",
@@ -86,6 +87,7 @@ KV_ORDER = (
     "duckdb_version",
     "section_records_sha256",
     "selection",
+    "applied",
 )
 # Keys whose value differs from file to file of one build.
 KV_PER_FILE = ("table", "foreign_keys", "section_records_sha256")

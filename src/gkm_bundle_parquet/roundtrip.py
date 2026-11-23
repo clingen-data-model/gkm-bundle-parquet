@@ -18,7 +18,8 @@ whitespace don't count. It serves three times:
   recomputes every section's records sha256 and the bundle's, and compares them with the recorded ones. Anything
   else stops it: a spec that is not lossless, a selection, deltas, a missing table or manifest, ordinals that are
   not 0..n-1, a pointer section outside the column's targets, a records sha256 that differs.
-- `verify --roundtrip`: `rebuild` without writing; with `--full`, also against that bundle's own records sha256.
+- `verify --roundtrip`: `rebuild` without writing; with `--full`, also against that bundle's own records sha256
+  (and, unless `apply` wrote the set, ADR 0011, its file sha256 against the recorded `source_bundle_sha256`).
 
 A set built by tool 1.x records the sha256s of its text (`section_text_sha256`, `source_text_sha256`) and no
 records sha256. Its text sha256s are ignored: `rebuild` writes the set and reports the records sha256 it
@@ -415,7 +416,7 @@ class _Lines:
         if len(line) > self.max_line:
             self.max_line = len(line)
 
-    def _source(self) -> str:
+    def source(self) -> str:
         max_line = 4 * self.max_line + 1024  # bytes; a character is at most 4
         return (
             f"read_csv({_lit(str(self.path))}, delim='\t', quote='', escape='', header=false, auto_detect=false, "
@@ -424,37 +425,49 @@ class _Lines:
         )
 
     def finish(self, con: duckdb.DuckDBPyConnection, table: str | None = None) -> str:
-        """The records sha256 of the lines; with `table`, also a temporary table of (key, sha), the key decoded."""
+        """The records sha256 of the lines; with `table`, also a temporary table of (key, sha, k), the key decoded
+        and `k` its canonical string form, as in the line."""
         self._fh.close()
         if not self.n:
             if table is not None:
-                con.execute(f"CREATE OR REPLACE TEMP TABLE {_ident(table)} (key VARCHAR, sha VARCHAR)")
+                con.execute(f"CREATE OR REPLACE TEMP TABLE {_ident(table)} (key VARCHAR, sha VARCHAR, k VARCHAR)")
             return EMPTY_SHA256
-        h = hashlib.sha256()
-        prev, seen = None, 0
+        sha, seen = lines_sha256(con, f"SELECT k, sha FROM {self.source()}", self.where)
         try:
-            rel = con.sql(f"SELECT k, sha FROM {self._source()} ORDER BY k")
-            while batch := rel.fetchmany(_FETCH):
-                for k, sha in batch:
-                    if prev is not None and k <= prev:
-                        raise RoundTripError(f"{self.where}: key {k} {'twice' if k == prev else 'out of order'}")
-                    h.update(f"{k}\t{sha}\n".encode())
-                    prev = k
-                seen += len(batch)
             if table is not None:
                 con.execute(
                     f"CREATE OR REPLACE TEMP TABLE {_ident(table)} AS "
-                    f"SELECT json_extract_string(k, '$') AS key, sha FROM {self._source()}"
+                    f"SELECT json_extract_string(k, '$') AS key, sha, k FROM {self.source()}"
                 )
         except duckdb.Error as e:
             raise RoundTripError(f"{self.where}: the records sha256: {e}") from e
         if seen != self.n:
             raise RoundTripError(f"{self.where}: {self.n} lines written, {seen} read back")
-        return h.hexdigest()
+        return sha
 
     def discard(self) -> None:
         self._fh.close()
         self.path.unlink(missing_ok=True)
+
+
+def lines_sha256(con: duckdb.DuckDBPyConnection, sql: str, where: str) -> tuple[str, int]:
+    """The records sha256 of the lines `k TAB sha` that `sql` gives (k: a key in canonical string form), sorted
+    here (DuckDB, spilling to disk), and how many. A key twice, or an order that isn't UTF-8 byte order, stops
+    it."""
+    h = hashlib.sha256()
+    prev, seen = None, 0
+    try:
+        rel = con.sql(f"SELECT k, sha FROM ({sql}) ORDER BY k")
+        while batch := rel.fetchmany(_FETCH):
+            for k, sha in batch:
+                if prev is not None and k <= prev:
+                    raise RoundTripError(f"{where}: key {k} {'twice' if k == prev else 'out of order'}")
+                h.update(f"{k}\t{sha}\n".encode())
+                prev = k
+            seen += len(batch)
+    except duckdb.Error as e:
+        raise RoundTripError(f"{where}: the records sha256: {e}") from e
+    return h.hexdigest(), seen
 
 
 def _hashed(
@@ -684,25 +697,35 @@ def built_by_1x(kvs: dict[str, dict[str, str]]) -> bool:
     )
 
 
-def rebuild(
-    out_dir: Path,
-    out: Path | None = None,
-    *,
-    memory_limit: str | None = None,
-    threads: int | None = None,
-    work_dir: Path | None = None,
-    compresslevel: int = 6,
-    workers: int | None = None,
-    log: Callable[[str], None] | None = None,
-) -> RebuildResult:
-    """Write the bundle a full lossless build was made from (`out`, gzip when it ends in .gz; None: hash only) and
-    check its records sha256s against the recorded ones (module docstring). Returns what was written; raises
-    RoundTripError (RoundTripMismatch for differing records) and leaves no output file on any failure."""
-    from .build import MANIFEST_NAME, configure
-    from .sqltemplate import macros_sql
+@dataclass
+class LosslessSet:
+    """A full lossless build on disk, as `read_lossless_set` checked it: what `rebuild` and `apply` read."""
+
+    spec: Spec
+    kvs: dict[str, dict[str, str]]  # file name -> its key-value metadata, the table files only
+    files: dict[str, Path]  # table -> its file
+    root_values_file: Path | None
+    manifest: dict
+    manifest_path: Path
+    expected: str | None  # the manifest's records_sha256; None for a set built by tool 1.x, which records none
+    legacy: bool  # built by tool 1.x
+    version: str | None  # the bundle's version (bundle_schema_version)
+    root_order: list[str]  # the manifest's source_root
+
+    def section_records(self) -> dict[str, str | None]:
+        """section -> the records sha256 its file records (None for a set built by tool 1.x)."""
+        return {
+            t.sections[0]: None if self.legacy else self.kvs[self.files[t.name].name]["section_records_sha256"]
+            for t in self.spec.tables
+        }
+
+
+def read_lossless_set(out_dir: Path) -> LosslessSet:
+    """Read and check what makes a directory a full lossless build (module docstring): its spec, its files and
+    their key-value metadata, and its manifest. Refuses anything else with RoundTripError."""
+    from .build import MANIFEST_NAME
     from .verify import dir_kv, spec_for_dir
 
-    log = log or (lambda m: None)
     out_dir = Path(out_dir)
     if not out_dir.is_dir():
         raise RoundTripError(f"{out_dir}: not a directory")
@@ -744,7 +767,6 @@ def rebuild(
     version = _shared_kv(kvs, "bundle_schema_version")
     if spec.bundle_schema_versions and version not in spec.bundle_schema_versions:
         raise RoundTripError(f"{out_dir}: bundle_schema_version {version} is not one spec {spec.label} reads")
-    sections = tuple(s for t in spec.tables for s in t.sections)
     manifest_path = out_dir / MANIFEST_NAME
     if not manifest_path.exists():
         raise RoundTripError(f"{manifest_path}: missing; a rebuild checks the bundle against its records_sha256")
@@ -772,6 +794,33 @@ def rebuild(
     root_order = manifest.get("source_root")
     if not isinstance(root_order, list) or not isinstance(manifest.get("round_trip"), dict):
         raise RoundTripError(f"{manifest_path}: no source_root and round_trip: not a lossless build's manifest")
+    return LosslessSet(
+        spec, kvs, files, root_values_file, manifest, manifest_path, expected, legacy, version, root_order
+    )
+
+
+def rebuild(
+    out_dir: Path,
+    out: Path | None = None,
+    *,
+    memory_limit: str | None = None,
+    threads: int | None = None,
+    work_dir: Path | None = None,
+    compresslevel: int = 6,
+    workers: int | None = None,
+    log: Callable[[str], None] | None = None,
+) -> RebuildResult:
+    """Write the bundle a full lossless build was made from (`out`, gzip when it ends in .gz; None: hash only) and
+    check its records sha256s against the recorded ones (module docstring). Returns what was written; raises
+    RoundTripError (RoundTripMismatch for differing records) and leaves no output file on any failure."""
+    from .build import configure
+    from .sqltemplate import macros_sql
+
+    log = log or (lambda m: None)
+    ls = read_lossless_set(out_dir)
+    spec, kvs, files, root_values_file = ls.spec, ls.kvs, ls.files, ls.root_values_file
+    manifest_path, expected, version, root_order = ls.manifest_path, ls.expected, ls.version, ls.root_order
+    sections = tuple(s for t in spec.tables for s in t.sections)
 
     tmp = None
     if out is not None:
@@ -801,9 +850,7 @@ def rebuild(
         unused = sorted(set(values) - set(root_order))
         if unused:
             raise RoundTripError(f"{manifest_path}: root value(s) {unused} are not in source_root")
-        want = {
-            s: None if legacy else kvs[files[t.name].name]["section_records_sha256"] for s, t in by_section.items()
-        }
+        want = ls.section_records()
         sink = _Out(tmp, compresslevel, gz=out is not None and out.name.endswith(".gz"))
         ok = False
         try:
@@ -1002,6 +1049,8 @@ def verify_roundtrip(
         out["checked"] += ["every section's section_records_sha256", "the manifest's records_sha256"]
     if full is not None:
         recorded = _shared_kv(kvs, "source_bundle_sha256")
+        # A set `apply` wrote (ADR 0011) has no source file: any bundle holding the same records matches it.
+        applied = _shared_kv(kvs, "applied") is not None
         inp = sources.resolve_input(full, sha256=sha256)
         con = duckdb.connect()
         try:
@@ -1014,7 +1063,7 @@ def verify_roundtrip(
                 src = bundle_records(inp, spec, work, hasher, memory_limit=memory_limit, threads=threads)
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        if src.sha256 != recorded:
+        if not applied and src.sha256 != recorded:
             raise RoundTripError(
                 f"--full {full} has sha256 {src.sha256}, but the files were built from {recorded}"
             )
@@ -1030,7 +1079,10 @@ def verify_roundtrip(
                 f"{src.records_sha256} (they differ in {', '.join(differ)})"
             )
             return out
-        out["checked"].append(f"the records of {inp.name}")
+        out["checked"].append(
+            f"the records of {inp.name}"
+            + (" (an applied set: by its records, as no one file holds it)" if applied else "")
+        )
     out["passed"] = True
     return out
 

@@ -1,4 +1,5 @@
-"""Command line: build, select, rebuild, verify, compile-spec, validate, version (design plan §10)."""
+"""Command line: build, select, rebuild, apply, verify, compile-spec, generate, validate, version (design plan
+§10)."""
 
 from __future__ import annotations
 
@@ -111,6 +112,32 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("dir", type=Path, help="the built directory")
     r.add_argument("-o", "--out", required=True, type=Path, help="the bundle to write (.json, or .json.gz)")
     _engine(r)
+
+    a = sub.add_parser(
+        "apply",
+        help="bring a built set up to date: remove deleted keys, then add or replace the records of a bundle",
+        description="Write a new set: the base set's records, less the keys --deletes lists and the keys the "
+        "--upserts bundle holds, plus every record of the --upserts bundle (deletes first, then upserts; ADR "
+        "0011). It equals a build of the replayed bundle, and records that bundle's records sha256s, so rebuild "
+        "and verify --roundtrip check it as they check a build. The base is a full build of this tool (or an "
+        "earlier apply), default or projection; --bundle-schema (and --column-set) must compile to its spec, and "
+        "the upserts bundle must hold the base's version. The base set is not changed.",
+    )
+    a.add_argument("base", type=Path, help="the built set to update")
+    a.add_argument(
+        "--upserts",
+        required=True,
+        help="a bundle of the base's schema and version holding the added and changed records: a path or URL",
+    )
+    a.add_argument("--sha256", help="the upserts bundle's expected sha256 (default: its <file>.sha256 sidecar)")
+    a.add_argument(
+        "--deletes",
+        help='the keys to remove: a JSON file (path or URL) {"<section>": ["<key>", ...]}; every key must be in '
+        "the base set",
+    )
+    _pairing(a)
+    a.add_argument("--out", required=True, type=Path, help="output directory (new or empty)")
+    _engine(a)
 
     v = sub.add_parser(
         "verify",
@@ -239,6 +266,12 @@ def _rebuild(args: argparse.Namespace) -> int:
     return run_rebuild_command(args)
 
 
+def _apply(args: argparse.Namespace) -> int:
+    from .apply import run_apply_command
+
+    return run_apply_command(args)
+
+
 def _verify(args: argparse.Namespace) -> int:
     from .verify import run_verify_command
 
@@ -258,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         "build": _build,
         "select": _select,
         "rebuild": _rebuild,
+        "apply": _apply,
         "verify": _verify,
         "compile-spec": _compile_spec,
         "generate": _generate,

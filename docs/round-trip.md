@@ -66,6 +66,21 @@ JSON parser and sha256: load the bundle, canonicalize each record, and hash the 
   left. It prints the records sha256.
 - **`verify --roundtrip`** does the same without writing; with `--full <bundle>` it also hashes that bundle, from its own
   text, and compares the two records sha256s, naming the sections (and the root) that differ.
+- **`apply`** (ADR 0011; unreleased, planned for 2.1.0) records the sha256s of the *replayed bundle*: the base set's
+  records, less the deleted and upserted keys, plus the upserts bundle's. It hashes every row of each table it changes,
+  as `rebuild` does, and checks that the rows kept from the base, with the rows it removed, give the base file's
+  `section_records_sha256`, and that the upserted rows give the upserts bundle's own. All of them give the new file's
+  `section_records_sha256`; an untouched table keeps the base's. So `rebuild` and `verify --roundtrip` check an applied set
+  as they check a build.
+
+## Sets `apply` wrote
+
+Such a set has no source file: its files' `source_bundle_sha256` is empty, and they carry `gkm_bundle_parquet.applied`,
+the chain of applications (each step's base records sha256, the sha256s of its upserts bundle and deletes file, and the
+records sha256 it gave), which the manifest repeats with the inputs' details. `rebuild` writes the replayed bundle and
+checks it against the recorded sha256s. `verify --roundtrip --full <bundle>` compares the set with `<bundle>` by records
+only, so any bundle holding the same records passes (a replay made another way, or the producer's full of the next
+release), whatever its file's sha256.
 
 ## Sets built by tool 1.x
 

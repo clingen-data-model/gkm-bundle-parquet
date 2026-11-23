@@ -37,6 +37,7 @@ it reads.
 | 1.0.1 | as 1.0.0 | as 1.0.0 |
 | 1.1.0 | as 1.0.0; the default bundle, `baseline` and `clinvar-gkm` deprecated | as 1.0.0 |
 | 2.0.0 | any bundle with its schema (required) and, optionally, a column set that is the default or a named projection; no default bundle. `verify` and `rebuild`: `sections` sets of 1.x and 2.0.0, key-value prefix `gkm_bundle_parquet.` or `clinvar_gkm_parquet.` | `sections` 2.0 (generated default, policy 2.0; no `key_order` or `ordinal`; a record-identical round trip), key-value prefix `gkm_bundle_parquet.` |
+| 2.1.0 (planned, unreleased) | as 2.0.0; `apply`: a full lossless set of tool 2.x (default or projection), a bundle of the same pairing and version, and a JSON file of deleted keys ([ADR 0011](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0011-apply-upserts-and-deletes.md), proposed) | as 2.0.0; a set `apply` writes has an empty `source_bundle_sha256` and the key-value entry `applied` |
 
 `sections`: one table per bundle collection (20 in ClinVar-GKM 1.1.0), keyed by `id`, compiled from a bundle schema and,
 optionally, a column set, with every record property its own typed column (named as the property; STRUCTs at any depth;
@@ -166,7 +167,7 @@ does a column set that neither compiles to the default nor declares a projection
 needs no schema; given `--bundle-schema` (and a `--column-set`, if the build had one), it also checks that they compile to
 the spec that wrote the files (the three hashes every file records), and exits 1 if they don't.
 
-`--memory-limit` (`build`, `select`, `rebuild`, `verify`) sets DuckDB's memory limit, e.g. `12GB`. Without it, the limit is
+`--memory-limit` (`build`, `select`, `rebuild`, `verify`, `apply`) sets DuckDB's memory limit, e.g. `12GB`. Without it, the limit is
 half the memory the process may use: the machine's physical memory, or its cgroup limit when that is lower (a container).
 DuckDB's own default, 80% of physical memory, bounds only its buffers and left too little for the rest of the process on
 a 32 GB machine. The limit doesn't change the files: a build that spills to `--work-dir` writes the same bytes.
@@ -199,6 +200,45 @@ pairing: its version property, if it has one, and its sections, so a bundle with
 [ADR 0004](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0004-driver-based-selection.md)
 and the [design plan](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/plans/2026-10-20-design.md)
 §4.5 and §10.
+
+## Bringing a set up to date: `apply` (unreleased, planned for 2.1.0)
+
+`apply` turns a set built from one release into the set of the next, from a small delta, without the full build
+([ADR 0011](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0011-apply-upserts-and-deletes.md),
+proposed). Its inputs are generic:
+
+- **the base**: a directory this tool wrote, a full build (default or projection) or an earlier `apply`; it isn't changed;
+- **`--upserts`**: an ordinary bundle of the base's schema and version holding every record to add or replace (a path or
+  URL, with `--sha256` or a sidecar, as `--full`);
+- **`--deletes`** (optional): a JSON object `{"<section>": ["<key>", ...]}` of the keys to remove; every key must be in
+  the base;
+- the base's pairing (`--bundle-schema`, and `--column-set` or `--version-property`), which must compile to the spec the
+  base records.
+
+It writes, into a new directory, the set a build of the *replayed bundle* gives: per section, the base's records less the
+deleted keys and the upserted keys, plus the upserts (deletes first, then upserts); root values replaced by name. It
+refuses an upserts bundle whose version differs from the base's: a delta of a new schema line doesn't apply to a set of
+the previous line, even when it starts from the same release date. Which delta follows which release, and how its files
+list the deletes, is the producer's. ClinVar-GKM, for example, lists them per section in each delta's manifest:
+
+```sh
+# the deletes file, from the delta's manifest
+jq '.sections | map_values(.deleted)' clinvar-gkm-delta_2026-1115.manifest.json > deletes-1115.json
+gkm-bundle-parquet apply parquet-1108/ --upserts clinvar-gkm-delta_2026-1115.json.gz --deletes deletes-1115.json \
+    --bundle-schema https://w3id.org/clingen/schema/clinvar-gkm/1.2.0/clinvar-gkm-bundle.schema.json \
+    --version-property schema_version --out parquet-1115/
+# check it: the round trip, and (when you hold it) the producer's full of the same release, by records
+gkm-bundle-parquet verify parquet-1115/ --roundtrip --full clinvar-gkm_2026-1115.json.gz
+```
+
+The output records the records sha256s of the replayed bundle, so `rebuild` writes that bundle back and `verify
+--roundtrip` checks it as it checks a build. It names no source file (`source_bundle_sha256` is empty), so `verify
+--roundtrip --full` compares it with any bundle by records only. Every file and the manifest carry the chain of
+applications (`applied`: each step's base records sha256 and the sha256s of its upserts bundle and deletes file); the
+manifest also names the base set's files and their sha256s. `apply` hashes every row of each table the delta touches
+and copies the rest; its memory is bounded by `--memory-limit`, as a build's. On ClinVar-GKM's 2026-11-08 delta
+(1.8 M records) as the base, applying the 2026-11-15 delta took 33 s on a laptop and equals a build of the replayed
+bundle, table for table (ADR 0011).
 
 ## Schema sources
 
@@ -248,7 +288,7 @@ fields and the migration command by command.
 | 1.x | 2.0.0 |
 | --- | --- |
 | `clinvar-gkm-parquet` (package `clinvar_gkm_parquet`) | `gkm-bundle-parquet` (package `gkm_bundle_parquet`), the same commands |
-| `--release`, `--index`, `--delta`, `--manifest`, `--full-source-release` | resolve the release yourself and pass one bundle with `--full`, plus `--sha256` or a `<file>.sha256` sidecar |
+| `--release`, `--index`, `--delta`, `--manifest`, `--full-source-release` | resolve the release yourself and pass one bundle with `--full`, plus `--sha256` or a `<file>.sha256` sidecar; to follow deltas, `apply` (planned for 2.1.0) each one's bundle and deleted keys to the set |
 | `build`, `select`, `compile-spec` or `validate` without `--bundle-schema` (the built-in ClinVar-GKM default) | give the bundle's schema with `--bundle-schema` (and `--version-property schema_version` for ClinVar-GKM); the tables are the schema's generated default |
 | a column set you wrote | `generate --check` it: a set that isn't the default needs `projection: <name>` |
 | the `ordinal` column (the record's position) | gone: rows are in key order, and the round trip doesn't depend on order |
@@ -278,7 +318,8 @@ with `baseline`, `clinvar-gkm`, a custom spec or from deltas are refused: check 
   [0006 — Tables compiled from a bundle schema and its column set](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0006-sections-spec-compiled-from-schemas.md),
   [0007 — The default set is generated from the bundle schema](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0007-default-generated-from-bundle-schema.md),
   [0008 — The end state](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0008-end-state-reversible-default-custom-projections-filters.md),
-  [0009 — A generic GKM bundle tool, renamed gkm-bundle-parquet](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0009-generic-gkm-bundle-tool-renamed.md).
+  [0009 — A generic GKM bundle tool, renamed gkm-bundle-parquet](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0009-generic-gkm-bundle-tool-renamed.md),
+  [0011 — `apply`: bring a built set up to date from an upserts bundle and a list of deleted keys](https://github.com/clingen-data-model/gkm-bundle-parquet/blob/main/docs/decisions/0011-apply-upserts-and-deletes.md) (proposed).
 
 ## Contributing
 

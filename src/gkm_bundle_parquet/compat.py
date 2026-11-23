@@ -28,7 +28,8 @@ SCHEMA_VERSION_RULE = (
     "Reads any bundle given its schema (--bundle-schema, required): the tables are the schema's generated "
     "default, or a --column-set that compiles to it or names a projection (ADR 0006, ADR 0007, ADR 0009); no "
     "producer's schema_version is built in. verify and rebuild read the spec a build wrote beside its manifest, "
-    "including sections sets written by tool 1.x."
+    "including sections sets written by tool 1.x. apply reads a full lossless set of tool 2.x with a bundle of "
+    "the same pairing and version and a JSON list of deleted keys (ADR 0011)."
 )
 
 

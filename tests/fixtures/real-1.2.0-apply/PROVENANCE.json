@@ -1,0 +1,261 @@
+{
+  "fixture": "real-1.2.0-apply",
+  "schema_version": "1.2.0",
+  "generator": "scripts/excerpt-apply-fixture.py",
+  "arguments": "--per-kind 2 --omit-from-base condition --take conditionSet=0,0,1,0",
+  "made": "2026-11-23",
+  "sources": {
+    "base": {
+      "url": "https://data.clinvar-gkm.org/v1/1.2/deltas/clinvar-gkm-delta_2026-1108.json.gz",
+      "release": "2026-11-08",
+      "schema_version": "1.2.0",
+      "sha256": "c98b5b0c0b583fa311c6efc3be4eb9281e922afeab77bc1e0c0421b4c54cb605",
+      "sha256_published": "c98b5b0c0b583fa311c6efc3be4eb9281e922afeab77bc1e0c0421b4c54cb605",
+      "size": 60824851
+    },
+    "upserts": {
+      "url": "https://data.clinvar-gkm.org/v1/1.2/deltas/clinvar-gkm-delta_2026-1115.json.gz",
+      "release": "2026-11-15",
+      "schema_version": "1.2.0",
+      "sha256": "b370d3857ffd709bf80ab6b9e81d8ef6f4e2bbbab8303df0fdb49547d3a353e3",
+      "sha256_published": "b370d3857ffd709bf80ab6b9e81d8ef6f4e2bbbab8303df0fdb49547d3a353e3",
+      "size": 5355360
+    },
+    "deletes": {
+      "url": "https://data.clinvar-gkm.org/v1/1.2/deltas/clinvar-gkm-delta_2026-1115.manifest.json",
+      "release": "2026-11-15",
+      "sha256": "83717ab0043950e7714a78c50dd20a03901b3e786ca0e8b5fb731beb76dbd321",
+      "derived_with": "jq '.sections | map_values(.deleted)'",
+      "derived_sha256": "11a8467f094d395cf246a8a5ef56c912861fce82c2678bb822346a928e4bab8a"
+    }
+  },
+  "files": {
+    "base.json.gz": {
+      "sha256": "155aeb0550179622ba2ee9b8e89c6508e30eebd74e6a72f15dd09cb21a170384",
+      "size": 5908
+    },
+    "upserts.json.gz": {
+      "sha256": "6b3c09b0334ae6dabb019769f259309106b1798c47aa6bd95bf89f134c2da6b8",
+      "size": 5434
+    },
+    "deletes.json": {
+      "sha256": "882685c320b976191cfdda129a4d9dff760d8a99ed75af388b337ea0fe06499a",
+      "size": 534
+    }
+  },
+  "counts": {
+    "base": {
+      "location": 2,
+      "allele": 2,
+      "copyNumberCount": 2,
+      "copyNumberChange": 2,
+      "gene": 2,
+      "variation": 4,
+      "conditionSet": 1,
+      "submitter": 2,
+      "propositionPathogenicity": 6,
+      "propositionClinvarCustom": 2,
+      "evidenceLine": 5,
+      "scv": 6,
+      "vcv": 4,
+      "rcv": 4
+    },
+    "upserts": {
+      "location": 2,
+      "allele": 2,
+      "copyNumberChange": 2,
+      "gene": 2,
+      "variation": 4,
+      "condition": 2,
+      "submitter": 2,
+      "propositionPathogenicity": 4,
+      "propositionClinvarCustom": 2,
+      "evidenceLine": 3,
+      "scv": 4,
+      "vcv": 2,
+      "rcv": 2
+    },
+    "deletes": {
+      "conditionSet": 1,
+      "propositionPathogenicity": 2,
+      "evidenceLine": 2,
+      "scv": 2,
+      "vcv": 2,
+      "rcv": 2
+    }
+  },
+  "selection": {
+    "location": {
+      "kept": [
+        "ga4gh:SL.--SNW2mOv-4BuxLsu2Gtk1GYZYXoR26l",
+        "ga4gh:SL.-13IYicf4fuXRKtsuLifaieFwNmvT_Fo"
+      ],
+      "added": [
+        "ga4gh:SL.-E2JyVatZSxhuQYhhcrsWjQETOtmiBFf",
+        "ga4gh:SL.-Fxd-6EYt9w5N83_tmjTKE95CG3Mr9dX"
+      ]
+    },
+    "allele": {
+      "kept": [
+        "ga4gh:VA.--7xRc0-ifWcegRQ3PnBllByDWKD7VLE",
+        "ga4gh:VA.--A-G4UIherMRXfAUjPEFn-eq_1vLLI_"
+      ],
+      "added": [
+        "ga4gh:VA.-tyidTku1qGYUe_5Eekf20vsOn_1ZYis",
+        "ga4gh:VA.0Ugl6habq_H576GHWkEQvA3FKIhcO61U"
+      ]
+    },
+    "copyNumberCount": {
+      "kept": [
+        "ga4gh:CN.0G4K_xnKZrEZZ5fURmRyp5Zkb_g4fb0B",
+        "ga4gh:CN.0d6mNDkjYkd6inuX7zffkUuzdz9bEQp8"
+      ]
+    },
+    "copyNumberChange": {
+      "kept": [
+        "ga4gh:CX.Xxiqb6BHVJWNZy465gfqEFSPTCk-g52y",
+        "ga4gh:CX._M0s1RSznC_9d3MPEt5sk_zxeCFPe0PA"
+      ],
+      "added": [
+        "ga4gh:CX.0GoNg3Pa5fSTlRVR9cfbKy0a4g96RRDR",
+        "ga4gh:CX.2s40IQ6kvczouHHQL4ZRdRmorNeV26_d"
+      ]
+    },
+    "gene": {
+      "kept": [
+        "ncbigene:100302278",
+        "ncbigene:101928988"
+      ],
+      "added": [
+        "ncbigene:100129540",
+        "ncbigene:101929439"
+      ]
+    },
+    "variation": {
+      "kept": [
+        "clinvar:1001327",
+        "clinvar:1005456"
+      ],
+      "replaced": [
+        "clinvar:1649512",
+        "clinvar:1800937"
+      ],
+      "added": [
+        "clinvar:1006177",
+        "clinvar:100877"
+      ]
+    },
+    "condition": {
+      "added": [
+        "clinvar.trait:1002",
+        "clinvar.trait:10032"
+      ]
+    },
+    "conditionSet": {
+      "deleted": [
+        "clinvar.conditionset:vcv-18fe62285134d1a8ee4b85732fe7389b"
+      ]
+    },
+    "submitter": {
+      "kept": [
+        "clinvar.submitter:510284",
+        "clinvar.submitter:510340"
+      ],
+      "added": [
+        "clinvar.submitter:509446",
+        "clinvar.submitter:509533"
+      ]
+    },
+    "propositionPathogenicity": {
+      "kept": [
+        "RCV000001437-G-PATH-CP",
+        "RCV000001500-G-PATH-CP"
+      ],
+      "replaced": [
+        "VCV000068466-G-PATH-CP",
+        "VCV000438833-G-PATH-NOCP"
+      ],
+      "deleted": [
+        "RCV007128649-G-PATH-NOCP",
+        "RCV007129258-G-PATH-NOCP"
+      ],
+      "added": [
+        "RCV000000008-G-PATH",
+        "RCV000000008-G-PATH-NOCP"
+      ]
+    },
+    "propositionClinvarCustom": {
+      "kept": [
+        "RCV000004821-G-NP-NOCP",
+        "RCV003482488-G-NP"
+      ],
+      "added": [
+        "RCV000008198-G-NP",
+        "RCV000008198-G-NP-NOCL"
+      ]
+    },
+    "evidenceLine": {
+      "kept": [
+        "RCV000000019.86-G-NP-NOCL.contributing",
+        "RCV000000019.86-G-NP.contributing"
+      ],
+      "replaced": [
+        "VCV000006821.121-G-PATH-CP.contributing"
+      ],
+      "deleted": [
+        "RCV000004093.208-G-AFF-NOCP.contributing",
+        "RCV000004093.208-G-AFF.contributing"
+      ],
+      "added": [
+        "RCV000000008.5-G-ASSOC-NOCP.contributing",
+        "RCV000000008.5-G-ASSOC.contributing"
+      ]
+    },
+    "scv": {
+      "kept": [
+        "clinvar.submission:SCV000023690.3",
+        "clinvar.submission:SCV000025468.4"
+      ],
+      "replaced": [
+        "clinvar.submission:SCV000189922.1",
+        "clinvar.submission:SCV000298080.2"
+      ],
+      "deleted": [
+        "clinvar.submission:SCV000024259.158",
+        "clinvar.submission:SCV000024260.157"
+      ],
+      "added": [
+        "clinvar.submission:SCV000020746.2",
+        "clinvar.submission:SCV000020747.2"
+      ]
+    },
+    "vcv": {
+      "kept": [
+        "VCV000000009.149-G-NP",
+        "VCV000000009.149-G-NP-NOCL"
+      ],
+      "deleted": [
+        "VCV000000354.110-G-PATH",
+        "VCV000000354.110-G-PATH-CP"
+      ],
+      "added": [
+        "VCV000000354.111-G-PATH",
+        "VCV000000354.111-G-PATH-CP"
+      ]
+    },
+    "rcv": {
+      "kept": [
+        "RCV000000019.86-G-NP",
+        "RCV000000019.86-G-NP-NOCL"
+      ],
+      "deleted": [
+        "RCV000004093.208-G-AFF",
+        "RCV000004093.208-G-AFF-NOCP"
+      ],
+      "added": [
+        "RCV000000008.5-G-ASSOC",
+        "RCV000000008.5-G-ASSOC-NOCP"
+      ]
+    }
+  }
+}

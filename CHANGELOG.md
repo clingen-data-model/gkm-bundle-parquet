@@ -6,6 +6,38 @@ too (ADR 0002, ADR 0006, ADR 0009). Tags are `vX.Y.Z`.
 
 ## Unreleased
 
+Planned as 2.1.0 (a new feature; no table-spec change: `sections` 2.0, policy 2.0).
+
+**New**
+
+- **`apply`: bring a built set up to date from a small delta** (ADR 0011, proposed). `apply BASE --upserts BUNDLE
+  [--deletes DELETES.json] --bundle-schema S [--column-set C | --version-property V] --out DIR` writes the set a build of
+  the replayed bundle gives: per section, the base's records less the deleted keys and the upserted keys, plus every
+  record of the upserts bundle (deletes first, then upserts), root values replaced by name. The inputs are generic: a
+  full lossless set of tool 2.x (default or projection, or an earlier `apply`), an ordinary bundle of the same pairing and
+  version, and a JSON object `{"<section>": ["<key>", ...]}`; the release model stays the producer's (ADR 0009). It
+  refuses a pairing that doesn't compile to the base's spec, an upserts bundle of another version, a deleted key the base
+  doesn't hold, a selection, and a set built by 1.x. Each touched table is rehashed and checked against the base's and the
+  upserts bundle's recorded records sha256s; untouched tables are copied. Evidence: on ClinVar-GKM's 2026-11-08 delta as
+  the base, with the 2026-11-15 delta and its deletes applied, all 20 tables equal a build of the JSON replay (1,815,952
+  rows; equal records sha256s), in 33.5 s at 3.0 GB peak on an M2 Pro; the suite proves it on an excerpt of those deltas
+  (`tests/fixtures/real-1.2.0-apply/`, with ClinVar-GKM's published 1.2.0 schema set as a new fixture) and on CIViC's
+  bundles, a chain of two applications included.
+- **Key-value metadata and manifest of an applied set:** `source_bundle_sha256` is empty (no one file holds the state),
+  every file carries the new key `applied` (the chain of applications: each step's base records sha256, base source
+  bundle sha256, upserts bundle sha256 and records sha256, deletes file sha256 and resulting records sha256), and the
+  manifest repeats it with `inputs.base` (directory, manifest sha256, records sha256, files), `inputs.upserts` and
+  `inputs.deletes`. A build's files are unchanged.
+
+**Changed**
+
+- **`verify --roundtrip --full B` on an applied set** compares the records only, since no file holds the state: any bundle
+  with the same records passes. For a build it still checks `B`'s sha256 against `source_bundle_sha256`. `rebuild` and the
+  other checks treat an applied set as a build.
+- `version --json`: `schema_version_rule` mentions `apply`.
+- `scripts/excerpt-apply-fixture.py` (new) cuts a small, consistent base, upserts bundle and deletes file from real
+  bundles, for tests.
+
 ## 2.0.0 (2026-11-19)
 
 The first release under the name `gkm-bundle-parquet` (ADR 0009), and the one that implements ADR 0007 and ADR 0008's
